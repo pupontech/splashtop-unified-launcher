@@ -1,0 +1,28 @@
+# Build output
+**/bin/
+**/obj/
+.vs/
+TestResults/
+artifacts/
+
+# IDE/user state
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local data and secrets
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.har
+*.trace
+*.etl
+.env
+
+# WebView2 account profile data (never commit)
+WebView2UserData/
+SplashtopProfile-*/
