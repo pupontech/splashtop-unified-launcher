@@ -45,4 +45,4 @@ Self-contained publish unless justified otherwise; WebView2 Evergreen runtime pr
 
 ## Kanban and GitHub tracking
 
-The Hermes Kanban graph follows the dependency chain above and starts unassigned. Human gates are deliberately blocked; automatic dispatch is not authorized. The repository's GitHub Issue tracking links the immediate Phase 1 blocker. Do not create workarounds to skip a blocked parent or the Phase 5 approval gate.
+The Phase 1 task starts `blocked` with `needs_input`. Later human-only tasks remain unassigned and dependency-waiting until their predecessor completes; when a human gate becomes actionable, block it for owner input before any dispatch. The Phase 5 approval task is the required parent of Phase 6. No worker has been assigned or dispatched. The Phase 1 GitHub Issue is https://github.com/pupontech/splashtop-unified-launcher/issues/1.
