@@ -121,7 +121,7 @@ internal static class BrowserSmokeTest
  <a id="popup" target="_blank" href="st-business://com.splashtop.business?source=popup-click">Popup native link</a>
  <a id="unrelated" href="file:///__splashtop_native_handoff_smoke_missing__.txt">Unrelated scheme link</a>
  <a id="untrusted" href="st-business://com.splashtop.business?source=untrusted-origin">Untrusted-origin link</a>
- <button id="delayed" type="button" onclick="setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Delayed redirect link</button>
+ <button id="delayed" type="button" onclick="setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Connect: script-triggered native chooser follow-up</button>
  </body></html>
  """;
 
@@ -204,10 +204,10 @@ internal static class BrowserSmokeTest
             popupNewWindowRequested = popupEvents.Any(item => item.EventName == "OnNewWindowRequested"),
             unrelatedSchemeRejected = true,
             untrustedOriginRejected = true,
-            delayedRedirect = new
+            scriptTriggeredChooserFollowUp = new
             {
                 uri = delayedUri,
-                observedIsUserInitiatedValues = delayedEvents.Select(item => item.IsUserInitiated).Distinct().ToArray(),
+                events = delayedEvents.Select(item => new { eventName = item.EventName, isUserInitiated = item.IsUserInitiated }).ToArray(),
                 dispatched = delayedWasDispatched
             }
         };
