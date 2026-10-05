@@ -80,6 +80,8 @@ jobs:
           dotnet test tests/SplashtopUnified.BusinessHandoff.Tests/SplashtopUnified.BusinessHandoff.Tests.csproj --configuration Release --verbosity normal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/SplashtopUnified.NativePreference.Tests/SplashtopUnified.NativePreference.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.Extractor.Tests/SplashtopUnified.Extractor.Tests.csproj --configuration Release --verbosity normal
 
       - name: Publish, run two isolated real-runtime smoke tests, and package
         shell: pwsh

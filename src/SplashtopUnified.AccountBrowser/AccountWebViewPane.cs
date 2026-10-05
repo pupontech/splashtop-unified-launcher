@@ -14,6 +14,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly BusinessAppHandoff _businessAppHandoff;
     private readonly NativeHandoffArm _nativeArm = new();
     private readonly Action<string, string, bool>? _handoffEventObserver;
+    private readonly Action<AccountInventorySnapshot>? _inventoryObserver;
     private readonly List<PopupWindow> _popups = [];
     private CoreWebView2Environment? _environment;
     private bool _disposed;
@@ -21,13 +22,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     public AccountWebViewPane(
         Action<string> status,
         IBusinessAppUriDispatcher? businessAppUriDispatcher = null,
-        Action<string, string, bool>? handoffEventObserver = null)
+        Action<string, string, bool>? handoffEventObserver = null,
+        string accountId = "",
+        string accountName = "",
+        Action<AccountInventorySnapshot>? inventoryObserver = null)
     {
         _status = status;
         _businessAppHandoff = new BusinessAppHandoff(businessAppUriDispatcher ?? new ShellBusinessAppUriDispatcher());
         _handoffEventObserver = handoffEventObserver;
+        _inventoryObserver = inventoryObserver;
+        AccountId = accountId;
+        AccountName = accountName;
         Children.Add(_webView);
     }
+
+    public string AccountId { get; }
+
+    public string AccountName { get; }
 
     public CoreWebView2 Core => _webView.CoreWebView2 ?? throw new InvalidOperationException("WebView2 is not initialized.");
     public CoreWebView2Environment? Environment { get; private set; }
@@ -168,6 +179,114 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         core.NewWindowRequested += OnNewWindowRequested;
         core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
         InstallNativePreference(core, _nativeArm, _status);
+        InstallInventoryExtraction(core);
+    }
+
+    /// <summary>
+    /// Loads the read-only console inventory extractor into every official console page and
+    /// accepts its message only from the trusted console origin and the exact fixed script.
+    /// </summary>
+    private void InstallInventoryExtraction(CoreWebView2 core)
+    {
+        core.NavigationCompleted += (_, _) => ReadInventoryAfterNavigation();
+        core.WebMessageReceived += (_, args) => HandleInventoryMessage(args);
+    }
+
+    /// <summary>
+    /// Runs the extractor once the page has settled. The console list is rendered by the
+    /// page's own scripts, so extraction is retried a bounded number of times rather than
+    /// reading a document-created snapshot that is still empty.
+    /// </summary>
+    private async void ReadInventoryAfterNavigation()
+    {
+        for (var attempt = 0; attempt < 5 && !_disposed; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 400 : 900));
+            if (_disposed || _webView.CoreWebView2 is null)
+            {
+                return;
+            }
+
+            try
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+        }
+    }
+
+    private void HandleInventoryMessage(CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        if (!IsOfficialConsoleOrigin(args.Source))
+        {
+            return;
+        }
+
+        string json;
+        try
+        {
+            json = args.TryGetWebMessageAsString();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (!ConsoleInventoryExtractor.TryParse(json, out var read) || read is null)
+        {
+            return;
+        }
+
+        var capturedAt = DateTimeOffset.Now;
+        var snapshot = new AccountInventorySnapshot(
+            AccountId, AccountName, read.Outcome, read.PageKind, read.Authentication,
+            read.RowCount, read.ReportedTotal, read.Rows, capturedAt, read.Diagnostic);
+        _inventoryObserver?.Invoke(snapshot);
+        _status(read.Outcome == InventoryOutcome.Unavailable
+            ? $"{AccountName}: no computer list on this page yet ({read.PageKind.ToString().ToLowerInvariant()})."
+            : $"{AccountName}: read {read.Rows.Count} row(s) — {read.Outcome.ToString().ToLowerInvariant()}.");
+    }
+
+    private static bool IsOfficialConsoleOrigin(string? source)
+    {
+        if (!Uri.TryCreate(source, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+               (string.Equals(uri.Host, "my.splashtop.com", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(uri.Host, "my.splashtop.eu", StringComparison.OrdinalIgnoreCase)) &&
+               uri.UserInfo.Length == 0 && uri.IsDefaultPort;
+    }
+
+    /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
+    public async Task RequestInventoryAsync()
+    {
+        if (_webView.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+    }
+
+    /// <summary>
+    /// Connects using the owning account's own console row, so the official client path is
+    /// preserved and no remote-session URL is constructed here.
+    /// </summary>
+    public async Task<string> ActivateConnectAsync(int rowIndex)
+    {
+        if (_webView.CoreWebView2 is null)
+        {
+            return "no-webview";
+        }
+
+        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryActions.ActivateConnectScript(rowIndex));
+        return raw.Trim('"');
     }
 
     /// <summary>

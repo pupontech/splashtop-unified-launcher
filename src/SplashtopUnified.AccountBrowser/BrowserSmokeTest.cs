@@ -60,6 +60,13 @@ internal static class BrowserSmokeTest
             }
             await AssertStateAsync(panes[0], "A", false); await AssertStateAsync(panes[1], "B", false);
             var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages);
+            await File.WriteAllTextAsync(Path.Combine(fixture, "computers.html"), InventoryFixture.ComputerListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
+            grid.Children.Remove(panes[1]);
+            panes[1].Dispose();
+            var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
+            panes[1] = await CreatePaneAsync(grid, 1, environments[1], folders[1], fixture, null, null, statusMessages, snapshots.Enqueue);
+            var inventory = await RunInventorySmokeAsync(panes[1], fixture, snapshots);
             var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
             Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
             var result = new
@@ -68,6 +75,7 @@ internal static class BrowserSmokeTest
                 userDataFolders = environments.Select(e => e.UserDataFolder).ToArray(),
                 webViewInitialized = panes.All(p => p.Core is not null),
                 nativeHandoff,
+                inventory,
                 credentialSaving = new { passwordAutosaveEnabled = panes[0].Core.Settings.IsPasswordAutosaveEnabled, generalAutofillEnabled = panes[0].Core.Settings.IsGeneralAutofillEnabled },
                 isolation = new { sameProcessTwoAccounts = true, cookiesIsolated = true, localStorageIsolated = true, sessionStorageIsolated = true, persistenceAfterControlRecreation = true, persistenceAfterEnvironmentRecreation = true }
             };
@@ -94,7 +102,8 @@ internal static class BrowserSmokeTest
         string fixture,
         IBusinessAppUriDispatcher? dispatcher,
         ConcurrentQueue<HandoffEvent>? handoffEvents,
-        ConcurrentQueue<string> statusMessages)
+        ConcurrentQueue<string> statusMessages,
+        Action<AccountInventorySnapshot>? inventoryObserver = null)
     {
         Action<string, string, bool>? observer = handoffEvents is null
             ? null
@@ -103,7 +112,7 @@ internal static class BrowserSmokeTest
         {
             Console.Error.WriteLine("SMOKE_BROWSER_STATUS=" + message);
             statusMessages.Enqueue(message);
-        }, dispatcher, observer);
+        }, dispatcher, observer, accountId: column == 0 ? "smoke-a" : "smoke-b", accountName: column == 0 ? "Smoke A" : "Smoke B", inventoryObserver: inventoryObserver);
         Grid.SetColumn(pane, column); grid.Children.Add(pane);
         try
         {
@@ -213,6 +222,56 @@ internal static class BrowserSmokeTest
                 events = delayedEvents.Select(item => new { eventName = item.EventName, isUserInitiated = item.IsUserInitiated }).ToArray(),
                 dispatched = delayedWasDispatched
             }
+        };
+    }
+
+    /// <summary>
+    /// Proves the inventory extractor against a fixture that reproduces only the column
+    /// labels observed in the official Splashtop support screenshot, and proves that
+    /// Connect is routed back into the owning page's own row control.
+    /// </summary>
+    private static async Task<object> RunInventorySmokeAsync(
+        AccountWebViewPane pane,
+        string fixture,
+        ConcurrentQueue<AccountInventorySnapshot> snapshots)
+    {
+        const string trustedOrigin = "https://my.splashtop.com";
+        pane.Core.SetVirtualHostNameToFolderMapping("my.splashtop.com", fixture, CoreWebView2HostResourceAccessKind.DenyCors);
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/computers.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList), "the console fixture to be extracted as a computer list");
+
+        var read = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList);
+        Require(read.Authentication == ConsoleAuthentication.Authenticated, "The fixture list is recognised as an authenticated console");
+        Require(read.Outcome == InventoryOutcome.Incomplete, "A list without a console-reported total is reported as incomplete, never complete");
+        Require(read.Rows.Count == 4, "All four fixture rows are extracted");
+        Require(read.Rows.Count(row => row.Name == "Fixture VM") == 2, "Duplicate display names are retained, never merged");
+        Require(read.Rows.Count(row => row.HasConnectControl) == 3, "Rows that expose a Connect control are marked as such");
+        Require(read.Rows[1].Group == "Servers", "The Group column is read from the fixture row");
+        Require(read.Rows[1].Notes == "lab", "The Notes column is read from the fixture row");
+
+        var firstConnect = await pane.ActivateConnectAsync(0);
+        Require(firstConnect == "clicked", "Connect activates the owning page's own row control");
+        var clickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
+        Require(clickCount.Trim() == "1", "The page observed exactly one Connect activation from the unified list");
+
+        var missingRow = await pane.ActivateConnectAsync(99);
+        Require(missingRow == "no-row", "A stale row index is refused without clicking anything");
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/login.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.Login), "the sign-in fixture to be recognised");
+        var signIn = snapshots.Last(item => item.PageKind == ConsolePageKind.Login);
+        Require(signIn.Outcome == InventoryOutcome.Unavailable, "A sign-in page is never an empty complete list");
+        Require(signIn.Authentication == ConsoleAuthentication.Required, "A sign-in page is reported as authentication required");
+
+        return new
+        {
+            capturedRows = read.Rows.Count,
+            duplicateDisplayNamesRetained = read.Rows.Count(row => row.Name == "Fixture VM"),
+            rowsWithConnectControl = read.Rows.Count(row => row.HasConnectControl),
+            outcome = read.Outcome.ToString(),
+            connectActivatedOnce = clickCount.Trim() == "1",
+            staleRowRefused = missingRow == "no-row",
+            signInOutcome = signIn.Outcome.ToString()
         };
     }
 
