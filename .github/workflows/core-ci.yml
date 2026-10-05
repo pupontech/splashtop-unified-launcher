@@ -1,0 +1,113 @@
+name: Core CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows Release build and tests
+    runs-on: windows-latest
+    steps:
+      # actions/checkout v7.0.1 — verified release commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-dotnet v6.0.0 — verified release commit SHA.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Require solution and test project
+        shell: bash
+        run: |
+          if [[ ! -f "SplashtopUnified.sln" ]]; then
+            echo "::error::Required root solution SplashtopUnified.sln is missing."
+            exit 1
+          fi
+          test_project="$(find tests -type f -name '*.Tests.csproj' -print -quit 2>/dev/null || true)"
+          if [[ -z "$test_project" ]]; then
+            echo "::error::No test project (*.Tests.csproj) was found under tests/."
+            exit 1
+          fi
+          echo "Found test project: $test_project"
+          expected_test_project="tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj"
+          if ! solution_projects="$(dotnet sln SplashtopUnified.sln list)"; then
+            echo "::error::Could not list projects in SplashtopUnified.sln."
+            exit 1
+          fi
+          solution_projects_normalized="$(printf '%s\n' "$solution_projects" | tr '\\' '/')"
+          if ! grep -Fqx "$expected_test_project" <<< "$solution_projects_normalized"; then
+            echo "::error::Required Core test project $expected_test_project is not listed in SplashtopUnified.sln."
+            printf '%s\n' "$solution_projects_normalized"
+            exit 1
+          fi
+
+      - name: Restore solution
+        run: dotnet restore SplashtopUnified.sln
+
+      - name: Build solution (Release)
+        run: dotnet build SplashtopUnified.sln --configuration Release --no-restore
+
+      - name: Test solution (Release)
+        run: dotnet test SplashtopUnified.sln --configuration Release --no-build --no-restore --verbosity normal
+
+  ubuntu-core:
+    name: Ubuntu .NET 10 platform-neutral Core
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1 — verified release commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-dotnet v6.0.0 — verified release commit SHA.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Require platform-neutral Core projects
+        shell: bash
+        run: |
+          core_project="src/SplashtopUnified.Core/SplashtopUnified.Core.csproj"
+          test_project="tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj"
+          if [[ ! -f "$core_project" ]]; then
+            echo "::error::Required platform-neutral Core project $core_project is missing."
+            exit 1
+          fi
+          if [[ ! -f "$test_project" ]]; then
+            echo "::error::Required Core test project $test_project is missing."
+            exit 1
+          fi
+          if [[ ! -f "SplashtopUnified.sln" ]]; then
+            echo "::error::Required root solution SplashtopUnified.sln is missing."
+            exit 1
+          fi
+          expected_test_project="tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj"
+          if ! solution_projects="$(dotnet sln SplashtopUnified.sln list)"; then
+            echo "::error::Could not list projects in SplashtopUnified.sln."
+            exit 1
+          fi
+          solution_projects_normalized="$(printf '%s\n' "$solution_projects" | tr '\\' '/')"
+          if ! grep -Fqx "$expected_test_project" <<< "$solution_projects_normalized"; then
+            echo "::error::Required Core test project $expected_test_project is not listed in SplashtopUnified.sln."
+            printf '%s\n' "$solution_projects_normalized"
+            exit 1
+          fi
+
+      - name: Restore Core tests
+        run: dotnet restore tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj
+
+      - name: Build Core (Release, .NET 10)
+        run: dotnet build src/SplashtopUnified.Core/SplashtopUnified.Core.csproj --configuration Release --framework net10.0 --no-restore
+
+      - name: Build Core tests (Release, .NET 10)
+        run: dotnet build tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj --configuration Release --framework net10.0 --no-restore
+
+      - name: Test Core (Release, .NET 10)
+        run: dotnet test tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj --configuration Release --framework net10.0 --no-build --no-restore --verbosity normal
