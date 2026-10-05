@@ -4,9 +4,11 @@
 
 **Phase 0 — current-documentation research: complete (2026-10-04).** Findings and ToS risks are in `RESEARCH-2026-10-04.md`.
 
-**Phase 1 — blocked on the owner.** A real Windows test is required. This agent runs on Linux and has neither the user's installed Splashtop Business client nor a selected test machine. No credentials, machine names, MACs or real launch URIs should be sent in chat. The owner can perform the test locally and report only the app version and outcome.
+**Owner direction (2026-10-05):** defer live URI-behavior testing until later and start code. The currently authorized source scope is a platform-neutral Core foundation only: normalized domain models/identity, pure merge/query/filter logic, and unit tests with synthetic data. This bounded foundation must not access Splashtop, WebView2, credentials, or account/device data.
 
-No source implementation or live-console inspection has begun. Do not dispatch implementation work before the phase gates are satisfied.
+**Phase 1 — still blocked on owner validation.** URI behavior is deferred as requested. No URI, opaque shortcut value, account sign-in, or real machine has been tested. The human gates and Phase 5 checkpoint still govern all Splashtop integration work.
+
+Do not implement or dispatch WebView2 hosting/profile authentication, console parsing/providers, direct or web-console connection, CSV import, SQLite persistence, WPF UI, or packaging before the corresponding validation gates and the required Phase 5 owner approval. Core-only work does not complete or waive Phases 1–5.
 
 ## Dependency chain
 
