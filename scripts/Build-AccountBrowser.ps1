@@ -225,6 +225,13 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.inventory.signInOutcome -ne 'Unavailable') {
         throw 'Real WebView2 unified-list extraction or Connect routing proof is missing or failed.'
     }
+    if ($runtimeResult.inventory.pagedRowsCaptured -ne 9 -or
+        $runtimeResult.inventory.pagedOutcome -ne 'Complete' -or
+        $runtimeResult.inventory.pagedReportedTotal -ne 9 -or
+        $runtimeResult.inventory.virtualisedRowsCaptured -ne 18 -or
+        $runtimeResult.inventory.virtualisedOutcome -ne 'Complete') {
+        throw 'The unified list did not walk every page and virtual-scroll window; a partial list would have been shipped.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
         credentialSaving = $runtimeResult.credentialSaving
@@ -350,7 +357,8 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 3. Double-click `START.bat` (or run `SplashtopUnified.AccountBrowser.exe`).
 4. Sign in only on the official Splashtop page inside the app. Complete any MFA, SSO, CAPTCHA, or new-device verification normally. Your browser login can be remembered: each account has its own isolated browser profile, and the engine may offer to save and reuse the console password inside that profile. The app itself never reads, asks for, or stores the password, and it does not export cookies or tokens.
 5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
-6. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
+6. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
+7. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 

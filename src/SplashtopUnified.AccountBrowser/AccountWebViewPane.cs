@@ -263,6 +263,28 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
                uri.UserInfo.Length == 0 && uri.IsDefaultPort;
     }
 
+    /// <summary>
+    /// Read-only structural survey of the owning console page, used to diagnose a list that
+    /// does not match the documented columns. Returns counts and labels only.
+    /// </summary>
+    public async Task<string> InspectConsoleAsync()
+    {
+        if (_webView.CoreWebView2 is null)
+        {
+            return "{}";
+        }
+
+        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.DiagnosticsScript);
+        try
+        {
+            return JsonSerializer.Deserialize<string>(raw) ?? "{}";
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
+    }
+
     /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
     public async Task RequestInventoryAsync()
     {

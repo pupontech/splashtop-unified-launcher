@@ -179,6 +179,19 @@ public sealed class ConsoleInventoryExtractorTests
         Assert.False(ConsoleInventoryExtractor.TryParse(json, out _));
     }
 
+    [Fact]
+    public void AWalkedClaimMustBeARealBoolean()
+    {
+        var valid = Message("complete", "computerList", "authenticated", 1, 1,
+            """{"name":"Only Fixture","deviceName":"only","group":"","notes":"","hasConnectControl":true}""")
+            .Replace("\"rows\":[", "\"walkedToEnd\":true,\"rows\":[", StringComparison.Ordinal);
+        Assert.True(ConsoleInventoryExtractor.TryParse(valid, out var read));
+        Assert.Equal(InventoryOutcome.Complete, read!.Outcome);
+
+        var malformed = valid.Replace("\"walkedToEnd\":true", "\"walkedToEnd\":\"true\"", StringComparison.Ordinal);
+        Assert.False(ConsoleInventoryExtractor.TryParse(malformed, out _));
+    }
+
     private static string Message(string outcome, string pageKind, string authentication, int rowCount, int? reportedTotal, params string[] rows)
     {
         var total = reportedTotal is null ? "null" : reportedTotal.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);

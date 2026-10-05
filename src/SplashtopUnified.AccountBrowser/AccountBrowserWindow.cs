@@ -94,7 +94,8 @@ internal sealed class AccountBrowserWindow : Window
                 _inventory,
                 RefreshInventoryAsync,
                 ConnectByAccountRowAsync,
-                message => { if (!_closed) _unifiedWindow!.Status(message); });
+                message => { if (!_closed) _unifiedWindow!.Status(message); },
+                InspectConsolesAsync);
             _unifiedWindow.Closed += (_, _) => _unifiedWindow = null;
             _unifiedWindow.Show();
         }
@@ -140,6 +141,31 @@ internal sealed class AccountBrowserWindow : Window
             "no-control" => $"{pane.AccountName}'s row has no Connect control; the console was left untouched.",
             _ => $"{pane.AccountName} could not be asked to connect ({outcome})."
         });
+    }
+
+    /// <summary>Read-only structural survey of each console, for diagnosing a partial list.</summary>
+    private async Task<string> InspectConsolesAsync()
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine("Read-only console survey. Counts and labels only; no row data, cookies or tokens.");
+        builder.AppendLine("Send this back if the merged list is missing computers.");
+        builder.AppendLine();
+        foreach (var pane in _panes.ToList())
+        {
+            builder.AppendLine("=== " + (string.IsNullOrEmpty(pane.AccountName) ? "(unnamed account)" : pane.AccountName) + " ===");
+            try
+            {
+                builder.AppendLine(await pane.InspectConsoleAsync());
+            }
+            catch (Exception ex)
+            {
+                builder.AppendLine("inspection failed: " + ex.Message);
+            }
+
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
     }
 
     private void MainThread(Action action)

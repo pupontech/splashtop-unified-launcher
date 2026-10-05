@@ -28,6 +28,7 @@ internal sealed class UnifiedInventoryWindow : Window
     private readonly InventorySnapshotStore _store;
     private readonly Func<Task> _refreshAll;
     private readonly Func<string, int, Task> _connectRow;
+    private readonly Func<Task<string>> _inspectConsoles;
     private readonly Action<string> _status;
     private readonly ListView _list = new();
     private readonly TextBox _search = new();
@@ -39,12 +40,14 @@ internal sealed class UnifiedInventoryWindow : Window
         InventorySnapshotStore store,
         Func<Task> refreshAll,
         Func<string, int, Task> connectRow,
-        Action<string> status)
+        Action<string> status,
+        Func<Task<string>>? inspectConsoles = null)
     {
         _store = store;
         _refreshAll = refreshAll;
         _connectRow = connectRow;
         _status = status;
+        _inspectConsoles = inspectConsoles ?? (() => Task.FromResult("No console inspection is available in this build."));
 
         Title = "Unified list · all accounts";
         Width = 1100;
@@ -66,6 +69,9 @@ internal sealed class UnifiedInventoryWindow : Window
         var connect = new Button { Content = "Connect", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(8, 0, 0, 0) };
         connect.Click += async (_, _) => await ConnectSelectedAsync();
         toolbar.Children.Add(connect);
+        var inspect = new Button { Content = "Inspect consoles", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Read-only survey of each console page, used to diagnose a list that does not match the expected columns." };
+        inspect.Click += async (_, _) => { inspect.IsEnabled = false; try { await ShowInspectionAsync(); } finally { inspect.IsEnabled = true; } };
+        toolbar.Children.Add(inspect);
         DockPanel.SetDock(toolbar, Dock.Top);
         root.Children.Add(toolbar);
 
@@ -103,6 +109,33 @@ internal sealed class UnifiedInventoryWindow : Window
         var binding = new System.Windows.Data.Binding(path);
         var column = new GridViewColumn { Header = header, Width = width, DisplayMemberBinding = binding };
         return column;
+    }
+
+    /// <summary>Shows the read-only console survey so a mismatch can be reported precisely.</summary>
+    private async Task ShowInspectionAsync()
+    {
+        var report = await _inspectConsoles();
+        var dialog = new Window
+        {
+            Title = "Console inspection (read-only)",
+            Owner = this,
+            Width = 760,
+            Height = 520,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        var box = new TextBox
+        {
+            Text = report,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            FontFamily = new FontFamily("Consolas"),
+            Padding = new Thickness(8)
+        };
+        dialog.Content = box;
+        dialog.ShowDialog();
     }
 
     /// <summary>Shows a short status line, e.g. the result of a connect request.</summary>

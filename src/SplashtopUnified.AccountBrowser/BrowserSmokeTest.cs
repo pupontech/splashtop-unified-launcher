@@ -62,6 +62,8 @@ internal static class BrowserSmokeTest
             var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages);
             await File.WriteAllTextAsync(Path.Combine(fixture, "computers.html"), InventoryFixture.ComputerListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "virtualised.html"), InventoryFixture.VirtualisedListHtml());
             grid.Children.Remove(panes[1]);
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
@@ -263,6 +265,27 @@ internal static class BrowserSmokeTest
         Require(signIn.Outcome == InventoryOutcome.Unavailable, "A sign-in page is never an empty complete list");
         Require(signIn.Authentication == ConsoleAuthentication.Required, "A sign-in page is reported as authentication required");
 
+        // A list that only renders one page at a time must still be read in full.
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/paged.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(
+            () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 9),
+            "the paged fixture to be walked past its first page");
+        var paged = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 9);
+        Require(paged.Rows.Count == 9, "All nine paged rows are captured, not only the first page");
+        Require(paged.Outcome == InventoryOutcome.Complete, "Walking every page and matching the console total is reported as complete");
+        Require(paged.ReportedTotal == 9, "The console-stated total is read from the pager");
+        Require(paged.Rows.Count(row => row.Name == "Fixture VM") == 2, "Paged duplicate display names are retained");
+
+        // A virtualised list that only renders the rows near the viewport must still be read in full.
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/virtualised.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(
+            () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 18),
+            "the virtualised fixture to be walked past its first window");
+        var virtualised = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 18);
+        Require(virtualised.Rows.Count == 18, "All eighteen virtualised rows are captured, not only the rendered window");
+        Require(virtualised.Outcome == InventoryOutcome.Complete, "Scrolling to the end and matching the console total is reported as complete");
+        Require(virtualised.Rows.Any(row => row.Name == "Fixture Node 18"), "A row that is only rendered after scrolling is captured");
+
         return new
         {
             capturedRows = read.Rows.Count,
@@ -271,7 +294,12 @@ internal static class BrowserSmokeTest
             outcome = read.Outcome.ToString(),
             connectActivatedOnce = clickCount.Trim() == "1",
             staleRowRefused = missingRow == "no-row",
-            signInOutcome = signIn.Outcome.ToString()
+            signInOutcome = signIn.Outcome.ToString(),
+            pagedRowsCaptured = paged.Rows.Count,
+            pagedOutcome = paged.Outcome.ToString(),
+            pagedReportedTotal = paged.ReportedTotal,
+            virtualisedRowsCaptured = virtualised.Rows.Count,
+            virtualisedOutcome = virtualised.Outcome.ToString()
         };
     }
 
