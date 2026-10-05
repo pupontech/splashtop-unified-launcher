@@ -232,6 +232,27 @@ public sealed class ConsoleInventoryExtractorTests
     private static string Hosted(string row) =>
         Message("incomplete", "computerList", "authenticated", 1, null).Replace("\"rows\":[]", "\"rows\":[" + row + "]", StringComparison.Ordinal);
 
+    [Fact]
+    public void ReadCostTelemetryIsCarriedAndValidated()
+    {
+        var payload = Message("complete", "computerList", "authenticated", 1, 1,
+            """{"name":"Only Fixture","deviceName":"only","group":"","notes":"","hasConnectControl":true}""")
+            .Replace("\"rows\":[", "\"pagesVisited\":7,\"walkMillis\":1234,\"rows\":[", StringComparison.Ordinal);
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(payload, out var read));
+        Assert.Equal(7, read!.PagesVisited);
+        Assert.Equal(1234, read.WalkMillis);
+
+        foreach (var bad in new[] { "\"pagesVisited\":\"7\"", "\"pagesVisited\":-1", "\"walkMillis\":\"fast\"", "\"walkMillis\":-5", "\"walkMillis\":900000" })
+        {
+            var property = bad.Split(':')[0];
+            var mutated = payload
+                .Replace("\"pagesVisited\":7", property == "\"pagesVisited\"" ? bad : "\"pagesVisited\":7", StringComparison.Ordinal)
+                .Replace("\"walkMillis\":1234", property == "\"walkMillis\"" ? bad : "\"walkMillis\":1234", StringComparison.Ordinal);
+            Assert.False(ConsoleInventoryExtractor.TryParse(mutated, out _));
+        }
+    }
+
     private static string Message(string outcome, string pageKind, string authentication, int rowCount, int? reportedTotal, params string[] rows)
     {
         var total = reportedTotal is null ? "null" : reportedTotal.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);

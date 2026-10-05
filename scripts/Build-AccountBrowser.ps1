@@ -244,6 +244,19 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.inventory.inventedChooserOptionRefused -ne $true) {
         throw 'The connect chooser was not detected and applied from the unified list.'
     }
+    if ($runtimeResult.inventory.extractionsForOneNavigation -ne 1) {
+        throw 'One page load triggered more than one console walk; the refresh cost regression is back.'
+    }
+    if ($runtimeResult.inventory.pagedPagesVisited -ne 3 -or
+        $runtimeResult.inventory.largeRowsCaptured -ne 240 -or
+        $runtimeResult.inventory.largeOutcome -ne 'Complete') {
+        throw 'The walk did not report the pages it visited or did not read a long account in full.'
+    }
+    if ($runtimeResult.inventory.pagedWallMillis -ge 8000 -or
+        $runtimeResult.inventory.largeWallMillis -ge 15000 -or
+        $runtimeResult.inventory.largeWalkMillis -ge 12000) {
+        throw 'Reading the console list exceeded the refresh budget.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
         credentialSaving = $runtimeResult.credentialSaving
@@ -371,6 +384,7 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes, plus each row's own online/offline indicator), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
 6. The `Status` column shows what the console's indicators say (for example `Online`, `Offline`, `In use`) and the summary line reports how many rows are online. If a list shows no indicators, the column stays blank and the summary says status was not reported - the app never guesses a status from a device name or anything else.
 7. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
+   Refresh reads every account at the same time, walks the console once per page load, and reports how long each read took (rows, pages and milliseconds) in the per-account line.
 8. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
 9. Pressing `Connect` shows Splashtop's own connect choice as a prompt in this window: `From the Splashtop Business App` or `From the Web App in this browser`, plus `Cancel`. Your answer is applied inside the owning account's console, so the console's own dialog does not need to be found in the split view. If no chooser appears, Splashtop started the session directly and the status line says so.
 

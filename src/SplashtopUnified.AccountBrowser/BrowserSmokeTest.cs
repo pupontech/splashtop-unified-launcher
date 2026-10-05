@@ -65,6 +65,7 @@ internal static class BrowserSmokeTest
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "virtualised.html"), InventoryFixture.VirtualisedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "chooser.html"), InventoryFixture.ChooserListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "large-virtualised.html"), InventoryFixture.LargeVirtualisedListHtml());
             grid.Children.Remove(panes[1]);
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
@@ -272,26 +273,56 @@ internal static class BrowserSmokeTest
         Require(signIn.Outcome == InventoryOutcome.Unavailable, "A sign-in page is never an empty complete list");
         Require(signIn.Authentication == ConsoleAuthentication.Required, "A sign-in page is reported as authentication required");
 
-        // A list that only renders one page at a time must still be read in full.
+        // A single navigation must produce exactly one extraction: the old behaviour walked
+        // the whole console five times per page load, which is what made refresh feel slow.
+        await Task.Delay(1500);
+        var extractionsForOneNavigation = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 5);
+        Require(extractionsForOneNavigation == 1, "One page load triggers exactly one console walk, not repeated walks");
+
+        // A list that only renders one page at a time must still be read in full, quickly.
+        var pagedStartedAt = DateTimeOffset.Now;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/paged.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(
             () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 9),
             "the paged fixture to be walked past its first page");
+        var pagedWallMillis = (int)(DateTimeOffset.Now - pagedStartedAt).TotalMilliseconds;
         var paged = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 9);
         Require(paged.Rows.Count == 9, "All nine paged rows are captured, not only the first page");
         Require(paged.Outcome == InventoryOutcome.Complete, "Walking every page and matching the console total is reported as complete");
         Require(paged.ReportedTotal == 9, "The console-stated total is read from the pager");
         Require(paged.Rows.Count(row => row.Name == "Fixture VM") == 2, "Paged duplicate display names are retained");
+        Require(paged.PagesVisited == 3, "The pager walk reports the three pages it visited");
+        Require(paged.WalkMillis > 0, "The pager walk reports its own duration");
+        Require(pagedWallMillis < 8000, "Walking a three-page console finishes well inside the refresh budget");
+        Require(paged.WalkMillis < 6000, "The three-page walk itself stays inside its budget");
 
         // A virtualised list that only renders the rows near the viewport must still be read in full.
+        var virtualisedStartedAt = DateTimeOffset.Now;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/virtualised.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(
             () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 18),
             "the virtualised fixture to be walked past its first window");
+        var virtualisedWallMillis = (int)(DateTimeOffset.Now - virtualisedStartedAt).TotalMilliseconds;
         var virtualised = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 18);
         Require(virtualised.Rows.Count == 18, "All eighteen virtualised rows are captured, not only the rendered window");
         Require(virtualised.Outcome == InventoryOutcome.Complete, "Scrolling to the end and matching the console total is reported as complete");
         Require(virtualised.Rows.Any(row => row.Name == "Fixture Node 18"), "A row that is only rendered after scrolling is captured");
+
+        // A long account: 240 rows rendered a window at a time. This is the case that used to
+        // take tens of seconds because every scroll step waited a fixed interval.
+        var largeStartedAt = DateTimeOffset.Now;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/large-virtualised.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(
+            () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240),
+            "the 240-row virtualised fixture to be walked to the end",
+            TimeSpan.FromSeconds(30));
+        var largeWallMillis = (int)(DateTimeOffset.Now - largeStartedAt).TotalMilliseconds;
+        var large = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
+        Require(large.Rows.Count == 240, "All 240 rows of a long account are captured");
+        Require(large.Outcome == InventoryOutcome.Complete, "Walking a long virtualised list to the end is reported as complete");
+        Require(large.Rows.Any(row => row.Name == "Fixture Node 240"), "The last row of a long account is captured");
+        Require(largeWallMillis < 15000, "Reading a 240-row virtualised account stays inside the refresh budget");
+        Require(large.WalkMillis < 12000, "The long-list walk itself stays inside its budget");
 
         // The console's connect chooser is presented and applied from the unified list.
         var absent = await pane.ProbeChooserAsync();
@@ -337,6 +368,15 @@ internal static class BrowserSmokeTest
             pagedReportedTotal = paged.ReportedTotal,
             virtualisedRowsCaptured = virtualised.Rows.Count,
             virtualisedOutcome = virtualised.Outcome.ToString(),
+            extractionsForOneNavigation,
+            pagedPagesVisited = paged.PagesVisited,
+            pagedWalkMillis = paged.WalkMillis,
+            pagedWallMillis,
+            virtualisedWallMillis,
+            largeRowsCaptured = large.Rows.Count,
+            largeOutcome = large.Outcome.ToString(),
+            largeWalkMillis = large.WalkMillis,
+            largeWallMillis,
             chooserDetected = chooser.Present,
             chooserNativeApplied = nativeApplied == "clicked",
             chooserWebApplied = webApplied == "clicked",
@@ -378,9 +418,9 @@ internal static class BrowserSmokeTest
     private static int CountBlockedHandoffs(ConcurrentQueue<string> statusMessages) =>
         statusMessages.Count(message => message.StartsWith("Blocked an external or executable URI scheme", StringComparison.Ordinal));
 
-    private static async Task WaitUntilAsync(Func<bool> condition, string description)
+    private static async Task WaitUntilAsync(Func<bool> condition, string description, TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;

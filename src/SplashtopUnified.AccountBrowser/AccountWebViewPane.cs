@@ -16,7 +16,11 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly Action<string, string, bool>? _handoffEventObserver;
     private readonly Action<AccountInventorySnapshot>? _inventoryObserver;
     private readonly List<PopupWindow> _popups = [];
+    private readonly SemaphoreSlim _walkLock = new(1, 1);
     private CoreWebView2Environment? _environment;
+    private int _inventoryGeneration;
+    private int _reportedGeneration = -1;
+    private ConsolePageKind _reportedPageKind = ConsolePageKind.Unknown;
     private bool _disposed;
 
     public AccountWebViewPane(
@@ -162,6 +166,8 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
         _webView.Dispose();
         _environment = null;
+        // Not disposed: an in-flight walk may still be releasing it, and the semaphore is
+        // tiny. Releasing after Dispose would throw, but a stale release is harmless.
     }
 
     private void ConfigureCore(CoreWebView2? core)
@@ -193,16 +199,31 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     /// <summary>
-    /// Runs the extractor once the page has settled. The console list is rendered by the
-    /// page's own scripts, so extraction is retried a bounded number of times rather than
-    /// reading a document-created snapshot that is still empty.
+    /// Runs the extractor after a navigation and stops as soon as the current document has
+    /// reported a computer list. Retrying is bounded and conditional, so a console that
+    /// renders the list immediately is read exactly once instead of being walked repeatedly.
     /// </summary>
     private async void ReadInventoryAfterNavigation()
     {
-        for (var attempt = 0; attempt < 5 && !_disposed; attempt++)
+        var generation = ++_inventoryGeneration;
+        for (var attempt = 0; attempt < 3 && !_disposed; attempt++)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 400 : 900));
+            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 250 : 600));
             if (_disposed || _webView.CoreWebView2 is null)
+            {
+                return;
+            }
+
+            if (HasConfidentReadFor(generation))
+            {
+                return;
+            }
+
+            try
+            {
+                await _walkLock.WaitAsync();
+            }
+            catch (ObjectDisposedException)
             {
                 return;
             }
@@ -215,8 +236,25 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             {
                 return;
             }
+            finally
+            {
+                _walkLock.Release();
+            }
+
+            // Give the page a moment to post; a reported list ends the retry loop early.
+            for (var wait = 0; wait < 6 && !_disposed; wait++)
+            {
+                await Task.Delay(120);
+                if (HasConfidentReadFor(generation))
+                {
+                    return;
+                }
+            }
         }
     }
+
+    private bool HasConfidentReadFor(int generation) =>
+        _reportedGeneration == generation && _reportedPageKind == ConsolePageKind.ComputerList;
 
     private void HandleInventoryMessage(CoreWebView2WebMessageReceivedEventArgs args)
     {
@@ -240,14 +278,20 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             return;
         }
 
+        _reportedGeneration = _inventoryGeneration;
+        _reportedPageKind = read.PageKind;
+
         var capturedAt = DateTimeOffset.Now;
         var snapshot = new AccountInventorySnapshot(
             AccountId, AccountName, read.Outcome, read.PageKind, read.Authentication,
-            read.RowCount, read.ReportedTotal, read.Rows, capturedAt, read.Diagnostic);
+            read.RowCount, read.ReportedTotal, read.Rows, capturedAt, read.Diagnostic,
+            read.PagesVisited, read.WalkMillis);
         _inventoryObserver?.Invoke(snapshot);
         _status(read.Outcome == InventoryOutcome.Unavailable
             ? $"{AccountName}: no computer list on this page yet ({read.PageKind.ToString().ToLowerInvariant()})."
-            : $"{AccountName}: read {read.Rows.Count} row(s) — {read.Outcome.ToString().ToLowerInvariant()}.");
+            : $"{AccountName}: read {read.Rows.Count} row(s) — {read.Outcome.ToString().ToLowerInvariant()}" +
+              (read.PagesVisited > 1 ? $", {read.PagesVisited} pages" : string.Empty) +
+              (read.WalkMillis > 0 ? $", {read.WalkMillis} ms" : string.Empty) + ".");
     }
 
     private static bool IsOfficialConsoleOrigin(string? source)
@@ -330,7 +374,22 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             return;
         }
 
-        await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+        // One walk per account at a time: a manual refresh must never stack on top of an
+        // in-flight automatic read, which would double the page clicks and the wait.
+        await _walkLock.WaitAsync();
+        try
+        {
+            if (_webView.CoreWebView2 is null)
+            {
+                return;
+            }
+
+            await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+        }
+        finally
+        {
+            _walkLock.Release();
+        }
     }
 
     /// <summary>

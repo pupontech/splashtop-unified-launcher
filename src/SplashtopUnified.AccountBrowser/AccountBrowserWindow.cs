@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace SplashtopUnified.AccountBrowser;
 
@@ -11,6 +12,7 @@ internal sealed class AccountBrowserWindow : Window
     private readonly List<AccountWebViewPane> _panes = [];
     private readonly InventorySnapshotStore _inventory = new();
     private UnifiedInventoryWindow? _unifiedWindow;
+    private bool _rebuildQueued;
     private bool _closed;
 
     public AccountBrowserWindow(AccountStore store, List<AccountProfile> profiles)
@@ -61,7 +63,7 @@ internal sealed class AccountBrowserWindow : Window
             accountId: profile.Id, accountName: profile.Name,
             inventoryObserver: snapshot => MainThread(() => {
                 if (_closed || !_inventory.Apply(snapshot)) return;
-                _unifiedWindow?.Rebuild();
+                ScheduleRebuild();
             }));
         _panes.Add(pane); panel.Children.Add(pane);
         reload.Click += (_, _) => { if (!_closed) pane.Navigate(_profiles[slot].ConsoleUrl); };
@@ -104,10 +106,18 @@ internal sealed class AccountBrowserWindow : Window
         _unifiedWindow.Rebuild();
     }
 
-    /// <summary>Asks every account's own console for a fresh read.</summary>
+    /// <summary>
+    /// Asks every account's own console for a fresh read. Accounts are read in parallel
+    /// because each has its own page and its own lock, so the slowest account sets the time
+    /// instead of the sum of all of them.
+    /// </summary>
     private async Task RefreshInventoryAsync()
     {
-        foreach (var pane in _panes.ToList())
+        var panes = _panes.ToList();
+        _unifiedWindow?.Status($"Reading {panes.Count} console(s)…");
+        var started = DateTimeOffset.Now;
+        var failures = new List<string>();
+        await Task.WhenAll(panes.Select(async pane =>
         {
             try
             {
@@ -115,12 +125,15 @@ internal sealed class AccountBrowserWindow : Window
             }
             catch (Exception ex)
             {
-                if (!_closed)
-                {
-                    _unifiedWindow?.Status($"{pane.AccountName} could not be read: {ex.Message}");
-                }
+                failures.Add($"{pane.AccountName}: {ex.Message}");
             }
-        }
+        }));
+
+        ScheduleRebuild();
+        var elapsed = (int)(DateTimeOffset.Now - started).TotalMilliseconds;
+        _unifiedWindow?.Status(failures.Count == 0
+            ? $"Read {panes.Count} console(s) in {elapsed} ms."
+            : $"Read {panes.Count} console(s) in {elapsed} ms; {string.Join("; ", failures)}");
     }
 
     private async Task ConnectByAccountRowAsync(string accountId, int rowIndex)
@@ -226,6 +239,31 @@ internal sealed class AccountBrowserWindow : Window
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Rebuilds the merged view once per burst instead of once per message. Reading several
+    /// accounts posts several snapshots in quick succession, and rebuilding per message
+    /// re-creates every row repeatedly for no visible benefit.
+    /// </summary>
+    private void ScheduleRebuild()
+    {
+        if (_rebuildQueued || _closed)
+        {
+            return;
+        }
+
+        _rebuildQueued = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _rebuildQueued = false;
+            if (_closed)
+            {
+                return;
+            }
+
+            _unifiedWindow?.Rebuild();
+        }), DispatcherPriority.Background);
     }
 
     private void MainThread(Action action)

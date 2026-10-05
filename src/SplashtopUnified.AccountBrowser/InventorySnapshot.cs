@@ -47,7 +47,9 @@ internal sealed record AccountInventorySnapshot(
     int? ReportedTotal,
     IReadOnlyList<ExtractedComputerRow> Rows,
     DateTimeOffset CapturedAtUtc,
-    string? Diagnostic)
+    string? Diagnostic,
+    int PagesVisited = 0,
+    int WalkMillis = 0)
 {
     public static AccountInventorySnapshot NotYetRead(string accountId, string accountName) =>
         new(accountId, accountName, InventoryOutcome.Unavailable, ConsolePageKind.Unknown,

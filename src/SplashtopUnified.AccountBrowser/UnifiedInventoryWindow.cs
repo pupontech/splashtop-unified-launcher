@@ -65,7 +65,7 @@ internal sealed class UnifiedInventoryWindow : Window
         _search.TextChanged += (_, _) => ApplyFilter();
         toolbar.Children.Add(_search);
         var refresh = new Button { Content = "Refresh from consoles", Padding = new Thickness(10, 4, 10, 4) };
-        refresh.Click += async (_, _) => { refresh.IsEnabled = false; try { await _refreshAll(); Rebuild(); } finally { refresh.IsEnabled = true; } };
+        refresh.Click += async (_, _) => { refresh.IsEnabled = false; try { await _refreshAll(); } finally { refresh.IsEnabled = true; } };
         toolbar.Children.Add(refresh);
         var connect = new Button { Content = "Connect", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(8, 0, 0, 0) };
         connect.Click += async (_, _) => await ConnectSelectedAsync();

@@ -100,6 +100,39 @@ internal static class InventoryFixture
     }
 
     /// <summary>
+    /// A larger virtualised list (240 rows, one short window rendered at a time) used to
+    /// bound the cost of walking a long account. Invented markup, not captured DOM.
+    /// </summary>
+    public static string LargeVirtualisedListHtml()
+    {
+        const int total = 240;
+        const int rowHeight = 12;
+        const int viewport = 180;
+        var rows = new List<string>();
+        for (var i = 1; i <= total; i++)
+        {
+            rows.Add($"{{n:'Fixture Node {i:D3}',d:'fixture-node-{i}',g:'Servers',t:''}}");
+        }
+
+        return "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
+            $"<div id='scroller' style='height:{viewport}px;overflow-y:auto'>" +
+            $"<div id='canvas' style='position:relative;height:{total * rowHeight}px'>" +
+            "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
+            "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
+            "<tbody id='rows'></tbody></table></div></div>" +
+            $"<p>{total} computers</p>" +
+            "<script>" +
+            "var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
+            "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');" +
+            "function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;" +
+            "var slice=all.slice(start,start+count);" +
+            "document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:'+RH+'px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td><td><button aria-label=\"More actions\">...</button></td></tr>';}).join('');" +
+            "table.style.transform='translateY('+(start*RH)+'px)';}" +
+            "scroller.addEventListener('scroll',render);render();" +
+            "</script></body></html>";
+    }
+
+    /// <summary>
     /// A list page that also shows the documented connect chooser, used to prove the choice
     /// is read and applied without the user touching the split view. Option labels are the
     /// exact official labels; the surrounding markup is invented, not captured DOM.

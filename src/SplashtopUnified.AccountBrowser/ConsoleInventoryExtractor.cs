@@ -12,7 +12,9 @@ internal sealed record ConsoleInventoryRead(
     int RowCount,
     int? ReportedTotal,
     IReadOnlyList<ExtractedComputerRow> Rows,
-    string? Diagnostic);
+    string? Diagnostic,
+    int PagesVisited = 0,
+    int WalkMillis = 0);
 
 /// <summary>
 /// Versioned extraction of the official console computers table (columns Name /
@@ -129,6 +131,37 @@ internal static class ConsoleInventoryExtractor
           return nodes.length;
         };
 
+        // A cheap fingerprint of what is currently rendered. Used to detect that a page or
+        // scroll step has actually repainted, so the walk never busy-waits a fixed interval
+        // per step and never re-reads the whole list to find out.
+        var signatureOf = function () {
+          var selector = grid.tagName === 'TABLE' ? 'tbody tr' : '[role=row]';
+          var nodes = grid.querySelectorAll(selector);
+          var count = nodes.length;
+          var first = count ? clean(nodes[0].textContent, 48) : '';
+          var last = count ? clean(nodes[count - 1].textContent, 48) : '';
+          var range = '';
+          var rangeNode = document.querySelector('.pagination,[class*=pagination],[class*=pager]');
+          if (rangeNode) { range = clean(rangeNode.textContent, 32); }
+          return count + '\u0001' + first + '\u0001' + last + '\u0001' + range;
+        };
+
+        // Waits only until the rendered content actually changes, then gives the repaint one
+        // more short beat so a partially rendered page is not collected.
+        var waitForChange = function (signature, maxMillis) {
+          var waited = 0;
+          return (function poll() {
+            if (waited >= maxMillis) { return Promise.resolve(false); }
+            return sleep(40).then(function () {
+              waited += 40;
+              if (signatureOf() !== signature) {
+                return sleep(40).then(function () { return true; });
+              }
+              return poll();
+            });
+          })();
+        };
+
         var disabled = function (element) {
           if (!element) { return true; }
           if (element.disabled) { return true; }
@@ -158,7 +191,8 @@ internal static class ConsoleInventoryExtractor
           window.chrome.webview.postMessage(JSON.stringify({
             source: 'splashtop-console-inventory', version: 1, outcome: 'unavailable',
             pageKind: hasPassword ? 'login' : 'unknown', authentication: hasPassword ? 'required' : 'unknown',
-            rowCount: 0, reportedTotal: null, rows: [], walkedToEnd: false, mode: 'none'
+            rowCount: 0, reportedTotal: null, rows: [], walkedToEnd: false, mode: 'none',
+            pagesVisited: 0, walkMillis: 0
           }));
           return;
         }
@@ -169,26 +203,41 @@ internal static class ConsoleInventoryExtractor
         var mode = 'single';
         var walkedToEnd = false;
 
+        var walkStartedAt = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+        var pagesVisited = 1;
+
         // Walk pagination when a pager is present.
-        var next = findByLabel(/^(next|next page|›|»|>)$/i) || findByLabel(/next\s*(page)?/i);
+        var nextOf = function () { return findByLabel(/^(next|next page|›|»|>)$/i) || findByLabel(/next\s*(page)?/i); };
+        var previousOf = function () { return findByLabel(/^(prev|previous|‹|«|<)$/i) || findByLabel(/(prev|previous)\s*(page)?/i); };
+        var next = nextOf();
         var pagerPresent = !!next || /\bof\s+\d/i.test(pageText);
         if (pagerPresent) {
           mode = 'paged';
           for (var page = 0; page < MAX_STEPS && next && !disabled(next) && rows.length < MAX_ROWS; page++) {
-            var before = rows.length;
+            var signature = signatureOf();
             next.click();
-            for (var settle = 0; settle < 24; settle++) {
-              await sleep(250);
-              collect(grid, seen, rows);
-              if (rows.length !== before) { break; }
-            }
-            if (rows.length === before) { break; }
-            next = findByLabel(/^(next|next page|›|»|>)$/i) || findByLabel(/next\s*(page)?/i);
+            var changed = await waitForChange(signature, 4000);
+            if (!changed) { break; }
+            collect(grid, seen, rows);
+            pagesVisited++;
+            next = nextOf();
           }
           walkedToEnd = !next || disabled(next);
-          // Best-effort: return the console to its first page.
-          var previous = findByLabel(/^(prev|previous|‹|«|<)$/i) || findByLabel(/(prev|previous)\s*(page)?/i);
-          for (var back = 0; back < MAX_STEPS && previous && !disabled(previous); back++) { previous.click(); await sleep(200); previous = findByLabel(/^(prev|previous|‹|«|<)$/i) || findByLabel(/(prev|previous)\s*(page)?/i); }
+          // Return the console to its first page: one click when a first-page control exists,
+          // otherwise walk back without waiting for repaints we do not need to read.
+          var firstPage = findByLabel(/^(first|first page|\u00ab|\u23ee)$/i) || findByLabel(/first\s*(page)?/i);
+          if (firstPage && !disabled(firstPage)) {
+            firstPage.click();
+            await sleep(120);
+          } else {
+            var previous = previousOf();
+            var stepsBack = Math.max(0, pagesVisited - 1);
+            for (var back = 0; back < stepsBack && previous && !disabled(previous); back++) {
+              previous.click();
+              await sleep(60);
+              previous = previousOf();
+            }
+          }
         } else {
           // Walk virtual scrolling: a long list may only render the rows near the viewport.
           var scrollCandidates = Array.prototype.slice.call(document.querySelectorAll('div,[role=grid],[role=region],main,section'))
@@ -204,22 +253,21 @@ internal static class ConsoleInventoryExtractor
           if (scroller) {
             mode = 'scrolled';
             scroller.scrollTop = 0;
-            await sleep(300);
+            await sleep(120);
             collect(grid, seen, rows);
             var stepSize = Math.max(120, Math.floor(scroller.clientHeight * 0.8));
             for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
               var previousTop = scroller.scrollTop;
-              var beforeCount = rows.length;
+              var scrollSignature = signatureOf();
               scroller.scrollTop = Math.min(previousTop + stepSize, scroller.scrollHeight);
-              await sleep(350);
+              await waitForChange(scrollSignature, 2000);
               collect(grid, seen, rows);
               var atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
-              if (atEnd && rows.length === beforeCount) { break; }
-              if (scroller.scrollTop === previousTop && rows.length === beforeCount) { break; }
+              if (scroller.scrollTop === previousTop && atEnd) { break; }
             }
             walkedToEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
             scroller.scrollTop = 0;
-            await sleep(250);
+            await sleep(80);
           }
         }
 
@@ -233,10 +281,13 @@ internal static class ConsoleInventoryExtractor
         }
         if (reportedTotal !== null && reportedTotal < rows.length) { outcome = 'incomplete'; }
 
+        var walkMillis = Math.round(((window.performance && window.performance.now) ? window.performance.now() : Date.now()) - walkStartedAt);
+
         window.chrome.webview.postMessage(JSON.stringify({
           source: 'splashtop-console-inventory', version: 1, outcome: outcome,
           pageKind: 'computerList', authentication: 'authenticated', rowCount: rows.length,
-          reportedTotal: reportedTotal, rows: rows, walkedToEnd: walkedToEnd, mode: mode
+          reportedTotal: reportedTotal, rows: rows, walkedToEnd: walkedToEnd, mode: mode,
+          pagesVisited: pagesVisited, walkMillis: walkMillis
         }));
       } catch (e) { /* fail closed: post nothing */ }
     })();
@@ -380,6 +431,25 @@ internal static class ConsoleInventoryExtractor
                 return false;
             }
 
+            // Optional read-cost telemetry, used to spot a regression in the walk itself.
+            var pagesVisited = 0;
+            if (root.TryGetProperty("pagesVisited", out var pagesElement) && pagesElement.ValueKind != JsonValueKind.Null)
+            {
+                if (pagesElement.ValueKind != JsonValueKind.Number || !pagesElement.TryGetInt32(out pagesVisited) || pagesVisited < 0 || pagesVisited > 10_000)
+                {
+                    return false;
+                }
+            }
+
+            var walkMillis = 0;
+            if (root.TryGetProperty("walkMillis", out var millisElement) && millisElement.ValueKind != JsonValueKind.Null)
+            {
+                if (millisElement.ValueKind != JsonValueKind.Number || !millisElement.TryGetInt32(out walkMillis) || walkMillis < 0 || walkMillis > 600_000)
+                {
+                    return false;
+                }
+            }
+
             var rows = new List<ExtractedComputerRow>(rowsElement.GetArrayLength());
             foreach (var item in rowsElement.EnumerateArray())
             {
@@ -425,7 +495,9 @@ internal static class ConsoleInventoryExtractor
                 rowCount,
                 reportedTotal,
                 rows,
-                diagnostic);
+                diagnostic,
+                pagesVisited,
+                walkMillis);
             return true;
         }
     }
