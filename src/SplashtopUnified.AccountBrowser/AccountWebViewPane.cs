@@ -296,7 +296,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         var snapshot = new AccountInventorySnapshot(
             AccountId, AccountName, read.Outcome, read.PageKind, read.Authentication,
             read.RowCount, read.ReportedTotal, read.Rows, capturedAt, read.Diagnostic,
-            read.PagesVisited, read.WalkMillis);
+            read.PagesVisited, read.WalkMillis, read.Mode);
         _inventoryObserver?.Invoke(snapshot);
         _status(read.Outcome == InventoryOutcome.Unavailable
             ? $"{AccountName}: no computer list on this page yet ({read.PageKind.ToString().ToLowerInvariant()})."
