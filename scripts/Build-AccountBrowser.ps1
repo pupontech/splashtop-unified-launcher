@@ -207,7 +207,14 @@ function Invoke-AccountBrowserSmokeTest {
         throw "Account Browser --smoke-test ($EnvironmentName) reported the same WebView2 user-data folder for both accounts."
     }
 
+    if ($runtimeResult.nativeHandoff.directLinkDispatchCount -ne 1 -or
+        $runtimeResult.nativeHandoff.popupLinkDispatchCount -ne 1 -or
+        $runtimeResult.nativeHandoff.unrelatedSchemeRejected -ne $true -or
+        $runtimeResult.nativeHandoff.untrustedOriginRejected -ne $true) {
+        throw 'Real WebView2 Business-app handoff proof is missing or failed.'
+    }
     return [ordered]@{
+        nativeHandoff = $runtimeResult.nativeHandoff
         environment = $EnvironmentName
         smokeTestArgument = '--smoke-test'
         exitCode = 0
