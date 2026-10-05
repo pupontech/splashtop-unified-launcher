@@ -232,6 +232,12 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.inventory.virtualisedOutcome -ne 'Complete') {
         throw 'The unified list did not walk every page and virtual-scroll window; a partial list would have been shipped.'
     }
+    if ($runtimeResult.inventory.chooserDetected -ne $true -or
+        $runtimeResult.inventory.chooserNativeApplied -ne $true -or
+        $runtimeResult.inventory.chooserWebApplied -ne $true -or
+        $runtimeResult.inventory.inventedChooserOptionRefused -ne $true) {
+        throw 'The connect chooser was not detected and applied from the unified list.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
         credentialSaving = $runtimeResult.credentialSaving
@@ -359,6 +365,7 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
 6. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
 7. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
+8. Pressing `Connect` shows Splashtop's own connect choice as a prompt in this window: `From the Splashtop Business App` or `From the Web App in this browser`, plus `Cancel`. Your answer is applied inside the owning account's console, so the console's own dialog does not need to be found in the split view. If no chooser appears, Splashtop started the session directly and the status line says so.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 

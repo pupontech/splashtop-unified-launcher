@@ -133,14 +133,74 @@ internal sealed class AccountBrowserWindow : Window
         }
 
         var outcome = await pane.ActivateConnectAsync(rowIndex);
-        _unifiedWindow?.Status(outcome switch
+        if (outcome != "clicked")
         {
-            "clicked" => $"Asked {pane.AccountName} to start the session through its own console row.",
-            "no-table" => $"{pane.AccountName} is not showing the computer list right now; the console was left untouched.",
-            "no-row" => $"{pane.AccountName} no longer shows that row; refresh and try again.",
-            "no-control" => $"{pane.AccountName}'s row has no Connect control; the console was left untouched.",
-            _ => $"{pane.AccountName} could not be asked to connect ({outcome})."
+            _unifiedWindow?.Status(outcome switch
+            {
+                "no-table" => $"{pane.AccountName} is not showing the computer list right now; the console was left untouched.",
+                "no-row" => $"{pane.AccountName} no longer shows that row; refresh and try again.",
+                "no-control" => $"{pane.AccountName}'s row has no Connect control; the console was left untouched.",
+                _ => $"{pane.AccountName} could not be asked to connect ({outcome})."
+            });
+            return;
+        }
+
+        // The console shows its documented chooser after a real Connect. Present that choice
+        // here, in this window, rather than making the user find it in the split view.
+        var probe = await WaitForChooserAsync(pane);
+        if (probe is not { Present: true })
+        {
+            _unifiedWindow?.Status($"{pane.AccountName}: no connection chooser appeared, so Splashtop started the session directly.");
+            return;
+        }
+
+        var choice = _unifiedWindow is null
+            ? null
+            : await _unifiedWindow.AskConnectChoiceAsync(pane.AccountName, probe);
+        if (choice is null)
+        {
+            _unifiedWindow?.Status("Connect cancelled. The console is still showing its own dialog if you want it there.");
+            return;
+        }
+
+        var applied = await pane.SelectChooserOptionAsync(choice);
+        _unifiedWindow?.Status(applied switch
+        {
+            "clicked" when choice == ConnectionChooser.NativeKey => $"Asked {pane.AccountName} to open this session in the Splashtop Business app.",
+            "clicked" => $"Asked {pane.AccountName} to open this session in the web app in that account's browser.",
+            "no-option" => "The console changed before the choice could be applied; try Connect again.",
+            "blocked" => "Refused to act outside the official console page.",
+            _ => $"The choice could not be applied ({applied})."
         });
+    }
+
+    /// <summary>
+    /// Waits a bounded time for the console's documented chooser to render after a Connect.
+    /// Returns null when it never appears, so a direct connection is not mistaken for a
+    /// chooser and no option is ever clicked blindly.
+    /// </summary>
+    private static async Task<ChooserProbe?> WaitForChooserAsync(AccountWebViewPane pane)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(attempt == 0 ? 500 : 600);
+            ChooserProbe? probe;
+            try
+            {
+                probe = await pane.ProbeChooserAsync();
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            if (probe is { Present: true })
+            {
+                return probe;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Read-only structural survey of each console, for diagnosing a partial list.</summary>

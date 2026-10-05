@@ -111,6 +111,68 @@ internal sealed class UnifiedInventoryWindow : Window
         return column;
     }
 
+    /// <summary>
+    /// Presents the console's connect choice as a native prompt in this window. Returns the
+    /// chosen option key, or null when the user cancels.
+    /// </summary>
+    public Task<string?> AskConnectChoiceAsync(string accountName, ChooserProbe probe)
+    {
+        var dialog = new Window
+        {
+            Title = "Connect to this computer",
+            Owner = this,
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+
+        var body = new StackPanel { Margin = new Thickness(16) };
+        body.Children.Add(new TextBlock
+        {
+            Text = probe.Heading ?? ConnectionChooser.HeadingText,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        body.Children.Add(new TextBlock
+        {
+            Text = $"Account: {accountName}",
+            Foreground = Brushes.DimGray,
+            Margin = new Thickness(0, 0, 0, 12)
+        });
+        body.Children.Add(new TextBlock
+        {
+            Text = "Choose how to open this session. The console behind this window is left untouched until you choose.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 16)
+        });
+
+        string? result = null;
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        if (probe.NativeAvailable)
+        {
+            var native = new Button { Content = ConnectionChooser.NativeLabel, Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
+            native.Click += (_, _) => { result = ConnectionChooser.NativeKey; dialog.DialogResult = true; };
+            buttons.Children.Add(native);
+        }
+
+        if (probe.WebAvailable)
+        {
+            var web = new Button { Content = ConnectionChooser.WebLabel, Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
+            web.Click += (_, _) => { result = ConnectionChooser.WebKey; dialog.DialogResult = true; };
+            buttons.Children.Add(web);
+        }
+
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(12, 6, 12, 6) };
+        cancel.Click += (_, _) => { result = null; dialog.DialogResult = false; };
+        buttons.Children.Add(cancel);
+        body.Children.Add(buttons);
+        dialog.Content = body;
+        dialog.ShowDialog();
+        return Task.FromResult(result);
+    }
+
     /// <summary>Shows the read-only console survey so a mismatch can be reported precisely.</summary>
     private async Task ShowInspectionAsync()
     {

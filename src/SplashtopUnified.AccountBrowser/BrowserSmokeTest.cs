@@ -64,6 +64,7 @@ internal static class BrowserSmokeTest
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "virtualised.html"), InventoryFixture.VirtualisedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "chooser.html"), InventoryFixture.ChooserListHtml());
             grid.Children.Remove(panes[1]);
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
@@ -286,6 +287,32 @@ internal static class BrowserSmokeTest
         Require(virtualised.Outcome == InventoryOutcome.Complete, "Scrolling to the end and matching the console total is reported as complete");
         Require(virtualised.Rows.Any(row => row.Name == "Fixture Node 18"), "A row that is only rendered after scrolling is captured");
 
+        // The console's connect chooser is presented and applied from the unified list.
+        var absent = await pane.ProbeChooserAsync();
+        Require(absent is null || !absent.Present, "A list page without a chooser is never reported as showing one");
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/chooser.html", TimeSpan.FromSeconds(20));
+        var chooser = await WaitForChooserAsync(pane);
+        Require(chooser is { Present: true, NativeAvailable: true, WebAvailable: true }, "The documented connect chooser and both of its options are detected");
+        Require(chooser!.Heading == ConnectionChooser.HeadingText, "The documented chooser heading is read");
+
+        var nativeApplied = await pane.SelectChooserOptionAsync(ConnectionChooser.NativeKey);
+        Require(nativeApplied == "clicked", "The Business-app option is applied inside the console");
+        Require((await pane.ExecuteScriptAsync("window.__chooserChoice||''")).Contains("native", StringComparison.Ordinal), "The console observed the Business-app choice");
+        var webApplied = await pane.SelectChooserOptionAsync(ConnectionChooser.WebKey);
+        Require(webApplied == "clicked", "The web-app option is applied inside the console");
+        Require((await pane.ExecuteScriptAsync("window.__chooserChoice||''")).Contains("web", StringComparison.Ordinal), "The console observed the web-app choice");
+        var inventedRefused = false;
+        try
+        {
+            await pane.SelectChooserOptionAsync("invented-option");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            inventedRefused = true;
+        }
+
+        Require(inventedRefused, "An option that is not one of the two documented labels is refused");
+
         return new
         {
             capturedRows = read.Rows.Count,
@@ -299,8 +326,28 @@ internal static class BrowserSmokeTest
             pagedOutcome = paged.Outcome.ToString(),
             pagedReportedTotal = paged.ReportedTotal,
             virtualisedRowsCaptured = virtualised.Rows.Count,
-            virtualisedOutcome = virtualised.Outcome.ToString()
+            virtualisedOutcome = virtualised.Outcome.ToString(),
+            chooserDetected = chooser.Present,
+            chooserNativeApplied = nativeApplied == "clicked",
+            chooserWebApplied = webApplied == "clicked",
+            inventedChooserOptionRefused = true
         };
+    }
+
+    private static async Task<ChooserProbe?> WaitForChooserAsync(AccountWebViewPane pane)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var probe = await pane.ProbeChooserAsync();
+            if (probe is { Present: true })
+            {
+                return probe;
+            }
+
+            await Task.Delay(200);
+        }
+
+        return null;
     }
 
     private static async Task ClickElementAsync(AccountWebViewPane pane, string elementId)

@@ -96,6 +96,23 @@ internal static class InventoryFixture
             "</script></body></html>";
     }
 
+    /// <summary>
+    /// A list page that also shows the documented connect chooser, used to prove the choice
+    /// is read and applied without the user touching the split view. Option labels are the
+    /// exact official labels; the surrounding markup is invented, not captured DOM.
+    /// </summary>
+    public static string ChooserListHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
+        "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead><tbody>" +
+        Row("Fixture Desktop", "fixture-desktop", "Default Group", string.Empty, true) +
+        "</tbody></table>" +
+        "<div role='dialog' aria-label='Connect to this Computer'>" +
+        "<h2>Connect to this Computer</h2>" +
+        "<button id='opt-native' onclick=\"window.__chooserChoice='native'\">From the Splashtop Business App</button>" +
+        "<p>Provides the fullest Splashtop experience; Installation required.</p>" +
+        "<button id='opt-web' onclick=\"window.__chooserChoice='web'\">From the Web App in this browser</button>" +
+        "</div></body></html>";
+
     private static string Row(string name, string device, string group, string notes, bool connect) =>
         "<tr>" +
         $"<td><span class='os-icon' aria-hidden='true'></span>{name}</td>" +

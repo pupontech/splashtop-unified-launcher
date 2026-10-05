@@ -285,6 +285,43 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads the owning console's documented connect chooser. Returns null when the chooser
+    /// is absent, so a page change can never be mistaken for a chooser.
+    /// </summary>
+    public async Task<ChooserProbe?> ProbeChooserAsync()
+    {
+        if (_webView.CoreWebView2 is null)
+        {
+            return null;
+        }
+
+        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConnectionChooser.ProbeScript);
+        string json;
+        try
+        {
+            json = JsonSerializer.Deserialize<string>(raw) ?? "{}";
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return ConnectionChooser.TryParseProbe(json, out var probe) ? probe : null;
+    }
+
+    /// <summary>Applies the chosen documented option inside the owning console page.</summary>
+    public async Task<string> SelectChooserOptionAsync(string optionKey)
+    {
+        if (_webView.CoreWebView2 is null)
+        {
+            return "no-webview";
+        }
+
+        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConnectionChooser.SelectScript(optionKey));
+        return raw.Trim('"');
+    }
+
     /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
     public async Task RequestInventoryAsync()
     {
