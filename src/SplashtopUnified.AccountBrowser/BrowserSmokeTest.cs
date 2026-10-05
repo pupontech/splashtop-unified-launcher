@@ -119,7 +119,7 @@ internal static class BrowserSmokeTest
  </head><body>
  <a id="direct" href="st-business://com.splashtop.business?source=main-click">Main-page native link</a>
  <a id="popup" target="_blank" href="st-business://com.splashtop.business?source=popup-click">Popup native link</a>
- <a id="unrelated" href="file:///__splashtop_native_handoff_smoke_missing__.txt">Unrelated scheme link</a>
+ <a id="unrelated" href="unrelated-smoke://invalid.test/blocked">Unrelated scheme link</a>
  <a id="untrusted" href="st-business://com.splashtop.business?source=untrusted-origin">Untrusted-origin link</a>
  <button id="delayed" type="button" onclick="setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Connect: script-triggered native chooser follow-up</button>
  </body></html>
@@ -136,7 +136,7 @@ internal static class BrowserSmokeTest
         const string untrustedUrl = "https://untrusted.test/handoff.html";
         const string directUri = "st-business://com.splashtop.business?source=main-click";
         const string popupUri = "st-business://com.splashtop.business?source=popup-click";
-        const string unrelatedUri = "file:///__splashtop_native_handoff_smoke_missing__.txt";
+        const string unrelatedUri = "unrelated-smoke://invalid.test/blocked";
         const string untrustedUri = "st-business://com.splashtop.business?source=untrusted-origin";
         const string delayedUri = "st-business://com.splashtop.business?source=delayed-redirect";
 
