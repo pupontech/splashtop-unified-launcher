@@ -5,7 +5,7 @@
 ## Environment
 
 - Report date: pending Phase 5
-- Splashtop Business version tested: **Not tested** (no Windows client available in agent environment)
+- Splashtop Business version tested by URI: **Not tested**; the owner reports the installed client is **3.8.6.1**. This is the first compatibility baseline, not a hard version restriction.
 - Web-console URLs tested and region redirects seen: **Not tested**. Candidate user-visible pages from project requirements: `https://my.splashtop.com/computers`, `https://my.splashtop.eu/computers`, and `/property/general/{id}?iframe=true` on the correct account's region host. Do not assume a region until observed.
 - Current stable engineering baseline from public docs (not a user-device test): .NET 10 LTS; Microsoft.Web.WebView2 1.0.4258.31 was the latest package shown 2026-10-04. Recheck before pinning dependencies.
 
