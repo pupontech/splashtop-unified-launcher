@@ -301,6 +301,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         _status(read.Outcome == InventoryOutcome.Unavailable
             ? $"{AccountName}: no computer list on this page yet ({read.PageKind.ToString().ToLowerInvariant()})."
             : $"{AccountName}: read {read.Rows.Count} row(s) — {read.Outcome.ToString().ToLowerInvariant()}" +
+              (read.Mode is { Length: > 0 } && read.Mode != "single" ? $", {read.Mode}" : string.Empty) +
               (read.PagesVisited > 1 ? $", {read.PagesVisited} pages" : string.Empty) +
               (read.WalkMillis > 0 ? $", {read.WalkMillis} ms" : string.Empty) + ".");
     }

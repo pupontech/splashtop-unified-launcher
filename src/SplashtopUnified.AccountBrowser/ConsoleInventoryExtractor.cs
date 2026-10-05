@@ -14,7 +14,8 @@ internal sealed record ConsoleInventoryRead(
     IReadOnlyList<ExtractedComputerRow> Rows,
     string? Diagnostic,
     int PagesVisited = 0,
-    int WalkMillis = 0);
+    int WalkMillis = 0,
+    string? Mode = null);
 
 /// <summary>
 /// Versioned extraction of the official console computers table (columns Name /
@@ -267,7 +268,7 @@ internal static class ConsoleInventoryExtractor
               var previousTop = scroller.scrollTop;
               var scrollSignature = signatureOf();
               scroller.scrollTop = Math.min(previousTop + stepSize, scroller.scrollHeight);
-              await waitForChange(scrollSignature, 900);
+              await waitForChange(scrollSignature, 700);
               collect(grid, seen, rows);
               var atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
               if (scroller.scrollTop === previousTop && atEnd) { break; }
@@ -278,11 +279,15 @@ internal static class ConsoleInventoryExtractor
           }
         }
 
+        // Completeness evidence, strongest first. Collecting exactly the number of unique rows
+        // the console itself states is proof we have the whole list, whatever the scroll
+        // position happened to be: overlapping windows can finish the list before the last
+        // step. Only a pager walk with no stated total may fall back to "walked to the end".
         var outcome;
-        if (mode === 'paged') {
-          outcome = walkedToEnd && (reportedTotal === null || reportedTotal === rows.length) ? 'complete' : 'incomplete';
-        } else if (mode === 'scrolled') {
-          outcome = walkedToEnd && reportedTotal !== null && reportedTotal === rows.length ? 'complete' : 'incomplete';
+        if (reportedTotal !== null && reportedTotal === rows.length) {
+          outcome = 'complete';
+        } else if (reportedTotal === null && walkedToEnd && mode === 'paged') {
+          outcome = 'complete';
         } else {
           outcome = 'incomplete';
         }
@@ -457,6 +462,23 @@ internal static class ConsoleInventoryExtractor
                 }
             }
 
+            string? mode = null;
+            if (root.TryGetProperty("mode", out var modeElement) && modeElement.ValueKind != JsonValueKind.Null)
+            {
+                if (modeElement.ValueKind != JsonValueKind.String)
+                {
+                    return false;
+                }
+
+                var text = modeElement.GetString();
+                if (text is not ("none" or "single" or "paged" or "scrolled"))
+                {
+                    return false;
+                }
+
+                mode = text;
+            }
+
             var rows = new List<ExtractedComputerRow>(rowsElement.GetArrayLength());
             foreach (var item in rowsElement.EnumerateArray())
             {
@@ -504,7 +526,8 @@ internal static class ConsoleInventoryExtractor
                 rows,
                 diagnostic,
                 pagesVisited,
-                walkMillis);
+                walkMillis,
+                mode);
             return true;
         }
     }

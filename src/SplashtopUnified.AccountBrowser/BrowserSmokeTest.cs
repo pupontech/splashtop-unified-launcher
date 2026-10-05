@@ -318,8 +318,9 @@ internal static class BrowserSmokeTest
             TimeSpan.FromSeconds(30));
         var largeWallMillis = (int)(DateTimeOffset.Now - largeStartedAt).TotalMilliseconds;
         var large = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
-        Require(large.Rows.Count == 240, "All 240 rows of a long account are captured");
-        Require(large.Outcome == InventoryOutcome.Complete, "Walking a long virtualised list to the end is reported as complete");
+        Require(large.Rows.Count == 240, $"All 240 rows of a long account are captured (got {large.Rows.Count}, mode {large.Mode}, total {large.ReportedTotal})");
+        Require(large.Outcome == InventoryOutcome.Complete,
+            $"Walking a long virtualised list to the end is reported as complete (got {large.Outcome}, mode {large.Mode}, rows {large.Rows.Count}, total {large.ReportedTotal}, pages {large.PagesVisited})");
         Require(large.Rows.Any(row => row.Name == "Fixture Node 240"), "The last row of a long account is captured");
         Require(largeWallMillis < 15000, "Reading a 240-row virtualised account stays inside the refresh budget");
         Require(large.WalkMillis < 12000, "The long-list walk itself stays inside its budget");

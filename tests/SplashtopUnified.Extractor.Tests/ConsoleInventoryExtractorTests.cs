@@ -253,6 +253,23 @@ public sealed class ConsoleInventoryExtractorTests
         }
     }
 
+    [Fact]
+    public void TheWalkModeIsCarriedAndValidated()
+    {
+        var payload = Message("complete", "computerList", "authenticated", 1, 1,
+            """{"name":"Only Fixture","deviceName":"only","group":"","notes":"","hasConnectControl":true}""")
+            .Replace("\"rows\":[", "\"mode\":\"scrolled\",\"rows\":[", StringComparison.Ordinal);
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(payload, out var read));
+        Assert.Equal("scrolled", read!.Mode);
+
+        foreach (var invalid in new[] { "\"mode\":\"walked\"", "\"mode\":42" })
+        {
+            Assert.False(ConsoleInventoryExtractor.TryParse(
+                payload.Replace("\"mode\":\"scrolled\"", invalid, StringComparison.Ordinal), out _));
+        }
+    }
+
     private static string Message(string outcome, string pageKind, string authentication, int rowCount, int? reportedTotal, params string[] rows)
     {
         var total = reportedTotal is null ? "null" : reportedTotal.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
