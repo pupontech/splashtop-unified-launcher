@@ -46,6 +46,10 @@ internal static class ConsoleInventoryExtractor
         var host = (location.hostname || '').toLowerCase();
         if (host !== 'my.splashtop.com' && host !== 'my.splashtop.eu') { return; }
         if (!('chrome' in window) || !window.chrome.webview) { return; }
+        // The walk is asynchronous, so a second request would fight the first for the same
+        // scroll position and could stop it early with a partial list. One walk at a time.
+        if (window.__splashtopInventoryWalkActive) { return; }
+        window.__splashtopInventoryWalkActive = true;
 
         var MAX_ROWS = 5000;
         var MAX_STEPS = 80;
@@ -256,11 +260,14 @@ internal static class ConsoleInventoryExtractor
             await sleep(120);
             collect(grid, seen, rows);
             var stepSize = Math.max(120, Math.floor(scroller.clientHeight * 0.8));
+            var scrollDeadline = ((window.performance && window.performance.now) ? window.performance.now() : Date.now()) + 25000;
             for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
+              var nowMillis = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+              if (nowMillis > scrollDeadline) { break; }
               var previousTop = scroller.scrollTop;
               var scrollSignature = signatureOf();
               scroller.scrollTop = Math.min(previousTop + stepSize, scroller.scrollHeight);
-              await waitForChange(scrollSignature, 2000);
+              await waitForChange(scrollSignature, 900);
               collect(grid, seen, rows);
               var atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
               if (scroller.scrollTop === previousTop && atEnd) { break; }
@@ -289,7 +296,7 @@ internal static class ConsoleInventoryExtractor
           reportedTotal: reportedTotal, rows: rows, walkedToEnd: walkedToEnd, mode: mode,
           pagesVisited: pagesVisited, walkMillis: walkMillis
         }));
-      } catch (e) { /* fail closed: post nothing */ }
+      } catch (e) { /* fail closed: post nothing */ } finally { window.__splashtopInventoryWalkActive = false; }
     })();
     """;
 

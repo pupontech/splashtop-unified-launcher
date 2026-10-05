@@ -16,11 +16,13 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly Action<string, string, bool>? _handoffEventObserver;
     private readonly Action<AccountInventorySnapshot>? _inventoryObserver;
     private readonly List<PopupWindow> _popups = [];
-    private readonly SemaphoreSlim _walkLock = new(1, 1);
     private CoreWebView2Environment? _environment;
     private int _inventoryGeneration;
     private int _reportedGeneration = -1;
+    private int _lastMessageGeneration = -1;
     private ConsolePageKind _reportedPageKind = ConsolePageKind.Unknown;
+    private bool _walkInFlight;
+    private DateTimeOffset _walkStartedAtUtc;
     private bool _disposed;
 
     public AccountWebViewPane(
@@ -166,8 +168,6 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
         _webView.Dispose();
         _environment = null;
-        // Not disposed: an in-flight walk may still be releasing it, and the semaphore is
-        // tiny. Releasing after Dispose would throw, but a stale release is harmless.
     }
 
     private void ConfigureCore(CoreWebView2? core)
@@ -200,61 +200,70 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
     /// <summary>
     /// Runs the extractor after a navigation and stops as soon as the current document has
-    /// reported a computer list. Retrying is bounded and conditional, so a console that
-    /// renders the list immediately is read exactly once instead of being walked repeatedly.
+    /// reported a computer list. Retrying is bounded, conditional, and never overlaps an
+    /// in-flight walk: the in-page walk is asynchronous, so a second request would fight it
+    /// for the same scroll position and could publish a partial list.
     /// </summary>
     private async void ReadInventoryAfterNavigation()
     {
         var generation = ++_inventoryGeneration;
         for (var attempt = 0; attempt < 3 && !_disposed; attempt++)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 250 : 600));
+            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 350 : 700));
             if (_disposed || _webView.CoreWebView2 is null)
             {
                 return;
             }
 
-            if (HasConfidentReadFor(generation))
+            if (HasConfidentReadFor(generation) || !await WaitForIdleWalksAsync())
             {
                 return;
             }
 
             try
             {
-                await _walkLock.WaitAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
-            try
-            {
+                _walkInFlight = true;
+                _walkStartedAtUtc = DateTimeOffset.UtcNow;
                 await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
             }
             catch (Exception)
             {
+                _walkInFlight = false;
                 return;
             }
-            finally
-            {
-                _walkLock.Release();
-            }
 
-            // Give the page a moment to post; a reported list ends the retry loop early.
-            for (var wait = 0; wait < 6 && !_disposed; wait++)
-            {
-                await Task.Delay(120);
-                if (HasConfidentReadFor(generation))
-                {
-                    return;
-                }
-            }
+            // The page owns the walk from here; wait for its one message before deciding
+            // whether another attempt is worth starting.
+            await WaitForMessageAsync(generation, TimeSpan.FromMilliseconds(attempt == 0 ? 3000 : 20000));
         }
     }
 
     private bool HasConfidentReadFor(int generation) =>
         _reportedGeneration == generation && _reportedPageKind == ConsolePageKind.ComputerList;
+
+    private bool WalkInFlight =>
+        _walkInFlight && DateTimeOffset.UtcNow - _walkStartedAtUtc < TimeSpan.FromSeconds(60);
+
+    /// <summary>Waits out any walk the page is still running. False when the pane was disposed.</summary>
+    private async Task<bool> WaitForIdleWalksAsync()
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
+        while (WalkInFlight && !_disposed && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
+
+        return !_disposed;
+    }
+
+    private async Task WaitForMessageAsync(int generation, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (_lastMessageGeneration < generation && !_disposed && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(80);
+        }
+    }
 
     private void HandleInventoryMessage(CoreWebView2WebMessageReceivedEventArgs args)
     {
@@ -279,7 +288,9 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
 
         _reportedGeneration = _inventoryGeneration;
+        _lastMessageGeneration = _inventoryGeneration;
         _reportedPageKind = read.PageKind;
+        _walkInFlight = false;
 
         var capturedAt = DateTimeOffset.Now;
         var snapshot = new AccountInventorySnapshot(
@@ -369,26 +380,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
     public async Task RequestInventoryAsync()
     {
-        if (_webView.CoreWebView2 is null)
+        // One walk per account at a time. The in-page walk is asynchronous, so starting a
+        // second one would fight the first for the same scroll position.
+        if (!await WaitForIdleWalksAsync() || _webView.CoreWebView2 is null)
         {
             return;
         }
 
-        // One walk per account at a time: a manual refresh must never stack on top of an
-        // in-flight automatic read, which would double the page clicks and the wait.
-        await _walkLock.WaitAsync();
         try
         {
-            if (_webView.CoreWebView2 is null)
-            {
-                return;
-            }
-
+            _walkInFlight = true;
+            _walkStartedAtUtc = DateTimeOffset.UtcNow;
             await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
         }
-        finally
+        catch (Exception)
         {
-            _walkLock.Release();
+            _walkInFlight = false;
+            throw;
         }
     }
 
