@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="../SplashtopUnified.Core/SplashtopUnified.Core.csproj" />
     <ProjectReference Include="../SplashtopUnified.Prototype/SplashtopUnified.Prototype.csproj" />
+    <Compile Remove="SplashtopUnified.Prototype/**/*.cs" />
     <Compile Remove="SmokeTests/**/*.cs" />
   </ItemGroup>
 </Project>

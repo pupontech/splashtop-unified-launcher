@@ -9,7 +9,7 @@ internal sealed record AccountProfile(string AccountId, string Name, string? Ema
 internal sealed class ApplicationState
 {
     public List<AccountProfile> Accounts { get; } = [];
-    public List<InventoryItem> Items { get; } = [];
+    public List<InventoryItem> Items { get; set; } = [];
 }
 
 internal sealed class InventoryRow : INotifyPropertyChanged
@@ -34,6 +34,7 @@ internal sealed class InventoryRow : INotifyPropertyChanged
     public string GroupName => Item.Computer.GroupName ?? "";
     public string Status => Item.Computer.Status?.ToString() ?? "Not provided";
     public string OperatingSystem => Item.Computer.OperatingSystem ?? "";
+    public bool SupportsLocalMetadata => Item.Computer.Identity.HasValue;
 
     public bool IsFavorite
     {

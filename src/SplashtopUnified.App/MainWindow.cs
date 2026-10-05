@@ -308,14 +308,18 @@ internal sealed class MainWindow : Window
         _grid.RowBackground = Card;
         _grid.AlternatingRowBackground = Brush("#F8FAFC");
         _grid.SelectionChanged += (_, _) => UpdateSelectionDetails();
+        var favoriteCellStyle = MetadataCellStyle();
         _grid.Columns.Add(new DataGridCheckBoxColumn
         {
             Header = "★",
             Binding = new Binding(nameof(InventoryRow.IsFavorite)) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+            CellStyle = favoriteCellStyle,
             Width = 42
         });
         _grid.Columns.Add(TextColumn("Device", nameof(InventoryRow.Name), 1.2, isReadOnly: true));
-        _grid.Columns.Add(TextColumn("Alias", nameof(InventoryRow.Alias), 1.0, isReadOnly: false));
+        var aliasColumn = TextColumn("Alias", nameof(InventoryRow.Alias), 1.0, isReadOnly: false);
+        aliasColumn.CellStyle = MetadataCellStyle();
+        _grid.Columns.Add(aliasColumn);
         _grid.Columns.Add(TextColumn("Account", nameof(InventoryRow.AccountBadge), 1.0, isReadOnly: true));
         _grid.Columns.Add(TextColumn("Status", nameof(InventoryRow.Status), 0.75, isReadOnly: true));
         _grid.Columns.Add(TextColumn("Group", nameof(InventoryRow.GroupName), 0.9, isReadOnly: true));
@@ -443,31 +447,24 @@ internal sealed class MainWindow : Window
 
         try
         {
-            var imported = CsvInventoryReader.Read(File.ReadAllText(dialog.FileName), selected.AccountId);
-            if (imported.Count == 0)
+            var plan = InventoryImportPipeline.Prepare(_state.Items, selected.AccountId, File.ReadAllText(dialog.FileName));
+            if (plan.ImportedCount == 0)
             {
                 SetStatus("The CSV contained no computer rows; existing inventory was left unchanged.", isError: true);
                 return;
             }
 
-            var priorMetadata = _state.Items
-                .Where(item => string.Equals(item.Computer.AccountId, selected.AccountId, StringComparison.OrdinalIgnoreCase))
-                .Where(item => item.Computer.SplashtopComputerId.HasValue)
-                .ToDictionary(item => item.Computer.SplashtopComputerId!.Value,
-                    item => item.LocalMetadata,
-                    EqualityComparer<long>.Default);
-            _state.Items.RemoveAll(item => string.Equals(item.Computer.AccountId, selected.AccountId, StringComparison.OrdinalIgnoreCase));
-            foreach (var item in imported)
+            var nextState = new ApplicationState();
+            nextState.Accounts.AddRange(_state.Accounts);
+            nextState.Items = plan.ReplacementItems;
+            if (!TryPersist(nextState))
             {
-                var computerId = item.Computer.SplashtopComputerId!.Value;
-                var metadata = priorMetadata.GetValueOrDefault(computerId);
-                var local = new LocalComputerMetadata(selected.AccountId, computerId, metadata?.IsFavorite ?? false, metadata?.Alias);
-                _state.Items.Add(new InventoryItem(item.Computer, local));
+                return;
             }
 
-            Persist();
+            _state.Items = plan.ReplacementItems;
             RefreshRows();
-            SetStatus($"Imported {imported.Count} CSV row(s) into '{selected.Label}'. This is a local snapshot; no live sync ran.");
+            SetStatus($"Imported {plan.ImportedCount} CSV row(s) into '{selected.Label}'. This is a local snapshot; no live sync ran.");
         }
         catch (Exception exception)
         {
@@ -535,7 +532,7 @@ internal sealed class MainWindow : Window
         }
     }
 
-    private static bool MatchesSearch(InventoryItem item, string search)
+    private bool MatchesSearch(InventoryItem item, string search)
     {
         if (search.Length == 0)
         {
@@ -543,6 +540,8 @@ internal sealed class MainWindow : Window
         }
 
         var computer = item.Computer;
+        var account = _state.Accounts.FirstOrDefault(profile =>
+            string.Equals(profile.AccountId, computer.AccountId, StringComparison.OrdinalIgnoreCase));
         var haystack = new[]
         {
             computer.Name,
@@ -553,26 +552,29 @@ internal sealed class MainWindow : Window
             computer.LoggedInUser,
             computer.Notes,
             computer.OperatingSystem,
-            computer.TeamName
+            computer.TeamName,
+            account?.Name,
+            account?.Email
         };
         return haystack.Any(value => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true);
     }
 
     private void InventoryRowChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (sender is not InventoryRow row || e.PropertyName is not (nameof(InventoryRow.IsFavorite) or nameof(InventoryRow.Alias)))
+        if (sender is not InventoryRow row || e.PropertyName is not (nameof(InventoryRow.IsFavorite) or nameof(InventoryRow.Alias)) ||
+            row.Item.Computer.Identity is not { } identity)
         {
             return;
         }
 
-        var index = _state.Items.FindIndex(item => item.Computer.Identity == row.Item.Computer.Identity);
-        if (index < 0 || row.Item.Computer.Identity is not { } identity)
+        var index = _state.Items.FindIndex(item => item.Computer.Identity == identity);
+        if (index < 0)
         {
             return;
         }
 
         var metadata = new LocalComputerMetadata(identity.AccountId, identity.SplashtopComputerId, row.IsFavorite,
-            string.IsNullOrWhiteSpace(row.Alias) ? null : row.Alias.Trim());
+            string.IsNullOrWhiteSpace(row.Alias) ? null : row.Alias.Trim(), row.Item.LocalMetadata?.Tags);
         var updated = new InventoryItem(row.Item.Computer, metadata);
         _state.Items[index] = updated;
         row.ReplaceItem(updated);
@@ -606,7 +608,10 @@ internal sealed class MainWindow : Window
             $"Hostname\n{(string.IsNullOrWhiteSpace(computer.Hostname) ? "Not provided" : computer.Hostname)}\n\n" +
             $"Group\n{(string.IsNullOrWhiteSpace(computer.GroupName) ? "Not provided" : computer.GroupName)}\n\n" +
             $"Operating system\n{(string.IsNullOrWhiteSpace(computer.OperatingSystem) ? "Not provided" : computer.OperatingSystem)}\n\n" +
-            $"Notes\n{(string.IsNullOrWhiteSpace(computer.Notes) ? "None" : computer.Notes)}";
+            $"Notes\n{(string.IsNullOrWhiteSpace(computer.Notes) ? "None" : computer.Notes)}" +
+            (computer.Identity is null
+                ? "\n\nLocal favorite/alias\nUnavailable: this CSV row has no numeric computer ID; the app will not invent one."
+                : "");
         _openConsoleButton.IsEnabled = account is not null;
         _openConsoleButton.Tag = account;
     }
@@ -636,20 +641,25 @@ internal sealed class MainWindow : Window
         }
     }
 
-    private void Persist()
+    private void Persist() => _ = TryPersist(_state);
+
+    private bool TryPersist(ApplicationState state)
     {
         if (!_persistenceHealthy)
         {
-            return;
+            SetStatus("Changes are disabled because the existing local state could not be read. Rename or repair it, then restart.", isError: true);
+            return false;
         }
 
         try
         {
-            _store.Save(_state);
+            _store.Save(state);
+            return true;
         }
         catch (Exception exception)
         {
             SetStatus($"Could not save local state at '{_store.FilePath}': {exception.Message}", isError: true);
+            return false;
         }
     }
 
@@ -691,6 +701,19 @@ internal sealed class MainWindow : Window
         normalizedUrl = uri.AbsoluteUri;
         error = "";
         return true;
+    }
+
+    private static Style MetadataCellStyle()
+    {
+        var style = new Style(typeof(DataGridCell));
+        var trigger = new DataTrigger
+        {
+            Binding = new Binding(nameof(InventoryRow.SupportsLocalMetadata)),
+            Value = false
+        };
+        trigger.Setters.Add(new Setter(IsEnabledProperty, false));
+        style.Triggers.Add(trigger);
+        return style;
     }
 
     private static DataGridTextColumn TextColumn(string header, string binding, double width, bool isReadOnly)

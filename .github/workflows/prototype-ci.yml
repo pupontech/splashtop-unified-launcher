@@ -64,6 +64,10 @@ jobs:
         shell: pwsh
         run: dotnet test tests/SplashtopUnified.Prototype.Tests/SplashtopUnified.Prototype.Tests.csproj --configuration Release --no-restore --verbosity normal
 
+      - name: Verify actual UI import pipeline regressions
+        shell: pwsh
+        run: dotnet run --project tests/SplashtopUnified.ImportProof/ImportProof.csproj --configuration Release
+
       - name: Publish, smoke test, and package portable ZIP
         shell: pwsh
         env:

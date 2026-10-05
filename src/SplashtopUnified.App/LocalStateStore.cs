@@ -10,8 +10,14 @@ internal sealed class LocalStateStore
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly string _path;
 
-    public LocalStateStore()
+    public LocalStateStore(string? filePath = null)
     {
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            _path = Path.GetFullPath(filePath);
+            return;
+        }
+
         var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(root))
         {
@@ -75,7 +81,7 @@ internal sealed class LocalStateStore
                 LocalId: entry.LocalId,
                 TeamName: entry.TeamName);
             LocalComputerMetadata? metadata = entry.ComputerId is { } computerId
-                ? new LocalComputerMetadata(entry.AccountId, computerId, entry.IsFavorite, entry.Alias)
+                ? new LocalComputerMetadata(entry.AccountId, computerId, entry.IsFavorite, entry.Alias, entry.Tags)
                 : null;
             state.Items.Add(new InventoryItem(computer, metadata));
         }
@@ -112,7 +118,8 @@ internal sealed class LocalStateStore
                 LocalId = item.Computer.LocalId,
                 TeamName = item.Computer.TeamName,
                 IsFavorite = item.LocalMetadata?.IsFavorite == true,
-                Alias = item.LocalMetadata?.Alias
+                Alias = item.LocalMetadata?.Alias,
+                Tags = item.LocalMetadata?.Tags.ToList() ?? []
             }).ToList()
         };
 
@@ -177,5 +184,6 @@ internal sealed class LocalStateStore
         public string? TeamName { get; set; }
         public bool IsFavorite { get; set; }
         public string? Alias { get; set; }
+        public List<string> Tags { get; set; } = [];
     }
 }
