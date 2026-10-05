@@ -213,8 +213,13 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.nativeHandoff.untrustedOriginRejected -ne $true) {
         throw 'Real WebView2 Business-app handoff proof is missing or failed.'
     }
+    if ($runtimeResult.credentialSaving.passwordAutosaveEnabled -ne $true -or
+        $runtimeResult.credentialSaving.generalAutofillEnabled -ne $true) {
+        throw 'Engine-managed password saving was not enabled in both isolated account profiles.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
+        credentialSaving = $runtimeResult.credentialSaving
         environment = $EnvironmentName
         smokeTestArgument = '--smoke-test'
         exitCode = 0
@@ -334,7 +339,7 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 1. Install the official Microsoft Edge WebView2 Evergreen Runtime if it is not already installed. Microsoft provides the Evergreen Bootstrapper and standalone installers at https://developer.microsoft.com/microsoft-edge/webview2/ . The runtime is a separate Microsoft component, is not bundled in this ZIP, and updates independently.
 2. Extract the complete ZIP to a writable folder. Keep `START.bat`, the application executable, `WebView2Loader.dll`, the managed WebView2 assemblies, and all other files together.
 3. Double-click `START.bat` (or run `SplashtopUnified.AccountBrowser.exe`).
-4. Sign in only on the official Splashtop page inside the app. Complete any MFA, SSO, CAPTCHA, or new-device verification normally. The app does not ask for or store your Splashtop password and does not export cookies or tokens.
+4. Sign in only on the official Splashtop page inside the app. Complete any MFA, SSO, CAPTCHA, or new-device verification normally. Your browser login can be remembered: each account has its own isolated browser profile, and the engine may offer to save and reuse the console password inside that profile. The app itself never reads, asks for, or stores the password, and it does not export cookies or tokens.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 

@@ -163,10 +163,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         core.Settings.AreDevToolsEnabled = false;
         core.Settings.IsStatusBarEnabled = true;
         core.Settings.AreDefaultContextMenusEnabled = true;
+        EnableCredentialSaving(core);
         core.NavigationStarting += OnNavigationStarting;
         core.NewWindowRequested += OnNewWindowRequested;
         core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
         InstallNativePreference(core, _nativeArm, _status);
+    }
+
+    /// <summary>
+    /// Lets the WebView2 engine offer to save and reuse the console login inside
+    /// this account's own browser profile. The app never reads, receives, or stores
+    /// the password itself; credential storage stays in the engine's encrypted
+    /// store, scoped to the account's isolated user-data folder.
+    /// </summary>
+    private static void EnableCredentialSaving(CoreWebView2 core)
+    {
+        core.Settings.IsPasswordAutosaveEnabled = true;
+        core.Settings.IsGeneralAutofillEnabled = true;
     }
 
     /// <summary>
@@ -393,6 +406,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             await WebView.EnsureCoreWebView2Async(_environment);
             var core = WebView.CoreWebView2;
             core.Settings.AreDevToolsEnabled = false;
+            EnableCredentialSaving(core);
             core.NavigationStarting += OnNavigationStarting;
             core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
             core.NewWindowRequested += OnNewWindowRequested;

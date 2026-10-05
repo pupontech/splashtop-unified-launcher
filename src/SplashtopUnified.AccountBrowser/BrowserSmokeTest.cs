@@ -60,12 +60,15 @@ internal static class BrowserSmokeTest
             }
             await AssertStateAsync(panes[0], "A", false); await AssertStateAsync(panes[1], "B", false);
             var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages);
+            var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
+            Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
             var result = new
             {
                 browserVersion = environments[0].BrowserVersionString,
                 userDataFolders = environments.Select(e => e.UserDataFolder).ToArray(),
                 webViewInitialized = panes.All(p => p.Core is not null),
                 nativeHandoff,
+                credentialSaving = new { passwordAutosaveEnabled = panes[0].Core.Settings.IsPasswordAutosaveEnabled, generalAutofillEnabled = panes[0].Core.Settings.IsGeneralAutofillEnabled },
                 isolation = new { sameProcessTwoAccounts = true, cookiesIsolated = true, localStorageIsolated = true, sessionStorageIsolated = true, persistenceAfterControlRecreation = true, persistenceAfterEnvironmentRecreation = true }
             };
             Console.WriteLine("ACCOUNT_BROWSER_SMOKE_RESULT=" + JsonSerializer.Serialize(result));
