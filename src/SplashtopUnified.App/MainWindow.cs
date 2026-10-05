@@ -416,12 +416,20 @@ internal sealed class MainWindow : Window
         }
 
         var account = new AccountProfile($"local-{Guid.NewGuid():N}", name, string.IsNullOrWhiteSpace(email) ? null : email, normalizedUrl);
+        var nextState = new ApplicationState();
+        nextState.Accounts.AddRange(_state.Accounts);
+        nextState.Accounts.Add(account);
+        nextState.Items = _state.Items;
+        if (!TryPersist(nextState))
+        {
+            return;
+        }
+
         _state.Accounts.Add(account);
         _nameInput.Clear();
         _emailInput.Clear();
         _consoleInput.Clear();
         RefreshAccountChoices(account.AccountId);
-        Persist();
         SetStatus($"Added account '{account.Name}'. Import a CSV snapshot to populate its inventory.");
     }
 
