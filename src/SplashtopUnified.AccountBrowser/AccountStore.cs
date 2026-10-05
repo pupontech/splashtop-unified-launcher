@@ -34,8 +34,8 @@ internal sealed class AccountStore
         {
             var initial = new List<AccountProfile>
             {
-                new(Guid.NewGuid().ToString("N"), "Global account", "https://my.splashtop.com/"),
-                new(Guid.NewGuid().ToString("N"), "EU account", "https://my.splashtop.eu/")
+                new(Guid.NewGuid().ToString("N"), "Global account 1", "https://my.splashtop.com/"),
+                new(Guid.NewGuid().ToString("N"), "Global account 2", "https://my.splashtop.com/")
             };
             Save(initial);
             return initial;
@@ -45,6 +45,17 @@ internal sealed class AccountStore
         var profiles = JsonSerializer.Deserialize<List<AccountProfile>>(json, JsonOptions)
             ?? throw new InvalidDataException("The saved account list is empty or unreadable.");
         ValidateProfiles(profiles);
+        // Migrate only the untouched previous default; keep IDs and browser folders.
+        var changed = false;
+        for (var i = 0; i < profiles.Count; i++)
+        {
+            if (profiles[i].Name == "EU account" && profiles[i].ConsoleUrl == "https://my.splashtop.eu/")
+            {
+                profiles[i] = profiles[i] with { Name = "Global account 2", ConsoleUrl = "https://my.splashtop.com/" };
+                changed = true;
+            }
+        }
+        if (changed) Save(profiles);
         return profiles;
     }
 
