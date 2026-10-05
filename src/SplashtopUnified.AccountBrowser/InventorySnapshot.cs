@@ -2,15 +2,18 @@ namespace SplashtopUnified.AccountBrowser;
 
 /// <summary>
 /// A single extracted computer row. Only fields the console list actually renders are
-/// carried; nothing is fabricated. There is deliberately no assumed numeric identity,
-/// MAC, status or timestamp because the list view does not expose one.
+/// carried; nothing is fabricated. There is deliberately no assumed numeric identity and
+/// no invented timestamp because the list view does not expose one. <see cref="Status"/>
+/// is null whenever the row shows no presence indicator, and is never inferred from a
+/// device name.
 /// </summary>
 internal sealed record ExtractedComputerRow(
     string Name,
     string? DeviceName,
     string? Group,
     string? Notes,
-    bool HasConnectControl);
+    bool HasConnectControl,
+    string? Status = null);
 
 internal enum InventoryOutcome
 {

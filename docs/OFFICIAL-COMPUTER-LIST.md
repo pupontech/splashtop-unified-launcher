@@ -26,18 +26,33 @@ control, two view-mode toggles, a filter control, and a search box.
 - No numeric console/computer ID column.
 - No MAC address, OS string, last-online time, or logged-in user column.
 - No total-count indicator or pagination control.
+- **No confirmed per-row presence indicator.** The screenshot shows an OS icon in the first
+  cell but no verified online/offline text or badge, so presence is *unproven* from this
+  evidence and must be treated as optional.
 
 ## Consequences for the unified list
 
-1. Extraction may supply `name`, `deviceName`, `group`, `notes`, and whether a row exposes a
-   Connect control. It must **not fabricate** an ID, MAC, status, or timestamp.
+1. Extraction may supply `name`, `deviceName`, `group`, `notes`, whether a row exposes a
+   Connect control, and row presence **only if the row itself states it**. Nothing else is
+   carried and nothing is inferred: no ID, MAC, OS, last-online time or timestamp.
 2. Because the list view exposes no numeric ID, extracted rows have **no stable composite
    identity**. They stay individually visible and must never be de-duplicated by name.
-3. Any documented per-device details (MAC/OS/last-online) require the separately permitted
+3. Presence is read **only** from an indicator the row itself carries, via its own
+   `aria-label`, `title` or `img`/`svg` `alt` text. This evidence does not confirm that such
+   an indicator exists in the live console, so the extractor must report no status when it
+   finds none, and a device name that merely contains a word like "online" is never treated
+   as status. A blanket `incomplete`/blank status is the correct outcome until the live
+   console shows otherwise.
+4. A row-level online/offline value is **not** a stable identity and must never be merged
+   on; it is display state that changes between reads and is deliberately excluded from the
+   row de-duplication key.
+5. Any documented per-device details (MAC/OS/last-online) require the separately permitted
    property/general view, which is out of scope for this extraction step.
-4. Because no total or pagination is visible, a first-run extraction cannot prove full-list
+6. Because no total or pagination is visible, a first-run extraction cannot prove full-list
    completeness; the honest outcome is `incomplete` unless the page itself reports a total.
-5. Connect must run in the owning account's own WebView by activating that row's Connect
+   Pagination and virtual scrolling are walked when the page provides them, and only a walk
+   that reached the end *and* matched a stated total is reported `complete`.
+7. Connect must run in the owning account's own WebView by activating that row's Connect
    control, so the official client path is preserved.
 
 This document is evidence of UI text and column semantics only. It is not a captured DOM,

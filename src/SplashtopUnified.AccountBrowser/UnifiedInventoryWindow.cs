@@ -14,6 +14,7 @@ internal sealed record UnifiedInventoryRow(
     string AccountBadge,
     int RowIndexInAccount,
     string Name,
+    string Status,
     string DeviceName,
     string Group,
     string Notes,
@@ -96,11 +97,12 @@ internal sealed class UnifiedInventoryWindow : Window
     private static GridView BuildColumns()
     {
         var view = new GridView();
-        view.Columns.Add(Column("Account", nameof(UnifiedInventoryRow.AccountBadge), 150));
-        view.Columns.Add(Column("Name", nameof(UnifiedInventoryRow.Name), 250));
-        view.Columns.Add(Column("Device Name", nameof(UnifiedInventoryRow.DeviceName), 200));
+        view.Columns.Add(Column("Account", nameof(UnifiedInventoryRow.AccountBadge), 140));
+        view.Columns.Add(Column("Status", nameof(UnifiedInventoryRow.Status), 90));
+        view.Columns.Add(Column("Name", nameof(UnifiedInventoryRow.Name), 240));
+        view.Columns.Add(Column("Device Name", nameof(UnifiedInventoryRow.DeviceName), 190));
         view.Columns.Add(Column("Group", nameof(UnifiedInventoryRow.Group), 150));
-        view.Columns.Add(Column("Notes", nameof(UnifiedInventoryRow.Notes), 220));
+        view.Columns.Add(Column("Notes", nameof(UnifiedInventoryRow.Notes), 200));
         return view;
     }
 
@@ -206,6 +208,11 @@ internal sealed class UnifiedInventoryWindow : Window
         _statusText.Text = message;
     }
 
+    private static bool IsOnlineLike(string status) =>
+        status.Equals("Online", StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("Available", StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("Connected", StringComparison.OrdinalIgnoreCase);
+
     public void Rebuild()
     {
         var merged = new List<UnifiedInventoryRow>();
@@ -220,6 +227,7 @@ internal sealed class UnifiedInventoryWindow : Window
                     snapshot.AccountName,
                     index,
                     row.Name,
+                    row.Status ?? string.Empty,
                     row.DeviceName ?? string.Empty,
                     row.Group ?? string.Empty,
                     row.Notes ?? string.Empty,
@@ -229,15 +237,23 @@ internal sealed class UnifiedInventoryWindow : Window
             var freshness = snapshot.CapturedAtUtc == DateTimeOffset.MinValue
                 ? "not read yet"
                 : snapshot.CapturedAtUtc.ToLocalTime().ToString("HH:mm:ss");
+            var statusReported = snapshot.Rows.Count(row => row.Status is { Length: > 0 });
+            var online = snapshot.Rows.Count(row => row.Status is { } status && IsOnlineLike(status));
             notes.Add($"{snapshot.AccountName}: {snapshot.Outcome.ToString().ToLowerInvariant()}, {snapshot.Rows.Count} row(s)" +
+                      (statusReported > 0 ? $", {online} online of {statusReported} reporting status" : ", status not reported by this list") +
                       (snapshot.ReportedTotal is { } total ? $", console reports {total}" : string.Empty) +
                       $", read {freshness}" +
                       (snapshot.Diagnostic is { Length: > 0 } diagnostic ? $" — {diagnostic}" : string.Empty));
         }
 
         _rows = merged;
-        _summary.Text = $"Merged {merged.Count} row(s) from {_store.All.Count} account(s). " +
-                        "Rows are never merged by name; the console list exposes no numeric identity.";
+        var allReported = merged.Count(row => row.Status.Length > 0);
+        var allOnline = merged.Count(row => IsOnlineLike(row.Status));
+        _summary.Text = $"Merged {merged.Count} row(s) from {_store.All.Count} account(s)." +
+                        (allReported > 0
+                            ? $" {allOnline} online of {allReported} row(s) reporting status."
+                            : " No row reported a status, so the Status column is blank rather than guessed.") +
+                        " Rows are never merged by name; the console list exposes no numeric identity.";
         _statusText.Text = string.Join(Environment.NewLine, notes);
         ApplyFilter();
     }
@@ -247,9 +263,9 @@ internal sealed class UnifiedInventoryWindow : Window
         var search = _search.Text.Trim();
         _list.ItemsSource = string.IsNullOrEmpty(search)
             ? _rows
-            : _rows.Where(row => Contains(row.Name, search) || Contains(row.DeviceName, search) ||
-                                 Contains(row.Group, search) || Contains(row.Notes, search) ||
-                                 Contains(row.AccountBadge, search)).ToList();
+            : _rows.Where(row => Contains(row.Name, search) || Contains(row.Status, search) ||
+                                 Contains(row.DeviceName, search) || Contains(row.Group, search) ||
+                                 Contains(row.Notes, search) || Contains(row.AccountBadge, search)).ToList();
     }
 
     private static bool Contains(string? value, string search) =>

@@ -96,7 +96,8 @@ internal static class ConsoleInventoryExtractor
               deviceName: clean(cells[1] ? cells[1].textContent : '', 512),
               group: clean(cells[2] ? cells[2].textContent : '', 512),
               notes: clean(cells[3] ? cells[3].textContent : '', 512),
-              hasConnectControl: false
+              hasConnectControl: false,
+              status: null
             };
             record.hasConnectControl = (function (rowNode) {
               var controls = Array.prototype.slice.call(rowNode.querySelectorAll('button,[role=button],a[href]'));
@@ -105,6 +106,22 @@ internal static class ConsoleInventoryExtractor
                 if (label.indexOf('connect') !== -1) { return true; }
               }
               return false;
+            })(nodes[i]);
+            // Presence is read only from an explicit indicator the row itself carries: an
+            // aria-label, title or image alt. A device name that merely contains such a word
+            // is never treated as status.
+            record.status = (function (rowNode) {
+              var statusWords = /^(online|offline|available|unavailable|connected|disconnected|in use|busy|idle|unreachable|sleeping|locked)$/i;
+              var indicators = Array.prototype.slice.call(rowNode.querySelectorAll('[aria-label],[title],img[alt],svg[aria-label]'));
+              for (var s = 0; s < indicators.length; s++) {
+                var node = indicators[s];
+                var text = clean(node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('alt') || '', 64);
+                if (!text) { continue; }
+                if (statusWords.test(text)) { return text; }
+                var word = text.match(/\b(online|offline|available|unavailable|connected|disconnected|in use|busy|idle|unreachable|sleeping|locked)\b/i);
+                if (word && text.length <= 40) { return word[1]; }
+              }
+              return null;
             })(nodes[i]);
             var key = record.name + '\u0001' + record.deviceName + '\u0001' + record.group;
             if (!seen[key]) { seen[key] = 1; rows.push(record); }
@@ -245,6 +262,16 @@ internal static class ConsoleInventoryExtractor
         var labels = Array.prototype.slice.call(document.querySelectorAll('button,[role=button],a[role=link]')).map(function (n) {
           return clean((n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '') + ' ' + n.textContent, 60);
         }).filter(function (t) { return t.length > 0; });
+        // Presence check: only status-like words are reported, so no device data can leak.
+        var statusWords = ['online', 'offline', 'available', 'unavailable', 'connected', 'disconnected', 'in use', 'busy', 'idle', 'unreachable', 'sleeping', 'locked'];
+        var presence = [];
+        Array.prototype.forEach.call(document.querySelectorAll('[aria-label],[title],img[alt],svg[aria-label]'), function (n) {
+          var text = clean(n.getAttribute('aria-label') || n.getAttribute('title') || n.getAttribute('alt') || '', 32).toLowerCase();
+          if (!text) { return; }
+          for (var w = 0; w < statusWords.length; w++) {
+            if (text.indexOf(statusWords[w]) !== -1 && presence.indexOf(statusWords[w]) === -1) { presence.push(statusWords[w]); }
+          }
+        });
         return JSON.stringify({
           tables: tables.length,
           tableHeaders: tables.map(function (t) { return Array.prototype.map.call(t.querySelectorAll('thead th'), function (th) { return clean(th.textContent, 40); }); }),
@@ -253,6 +280,7 @@ internal static class ConsoleInventoryExtractor
           gridHeaderCells: Array.prototype.map.call(document.querySelectorAll('[role=columnheader]'), function (n) { return clean(n.textContent, 40); }),
           scrollContainers: scrollers,
           hasPasswordField: !!document.querySelector('input[type=password]'),
+          presenceWords: presence,
           controlLabels: labels.slice(0, 60),
           bodyTextSample: clean(document.body ? document.body.textContent : '', 400)
         });
@@ -365,12 +393,13 @@ internal static class ConsoleInventoryExtractor
                     !TryOptionalString(item, "group", out var group) ||
                     !TryOptionalString(item, "notes", out var notes) ||
                     !item.TryGetProperty("hasConnectControl", out var connectElement) ||
-                    connectElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    connectElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                    !TryOptionalString(item, "status", out var status, 64))
                 {
                     return false;
                 }
 
-                rows.Add(new ExtractedComputerRow(name, deviceName, group, notes, connectElement.GetBoolean()));
+                rows.Add(new ExtractedComputerRow(name, deviceName, group, notes, connectElement.GetBoolean(), status));
             }
 
             if (rowCount != rows.Count)
@@ -419,7 +448,7 @@ internal static class ConsoleInventoryExtractor
         return true;
     }
 
-    private static bool TryOptionalString(JsonElement element, string property, out string? value)
+    private static bool TryOptionalString(JsonElement element, string property, out string? value, int maxLength = MaxFieldChars)
     {
         value = null;
         if (!element.TryGetProperty(property, out var candidate) || candidate.ValueKind == JsonValueKind.Null)
@@ -433,7 +462,7 @@ internal static class ConsoleInventoryExtractor
         }
 
         var text = candidate.GetString();
-        if (text is null || !IsClean(text, MaxFieldChars))
+        if (text is null || !IsClean(text, maxLength))
         {
             return false;
         }

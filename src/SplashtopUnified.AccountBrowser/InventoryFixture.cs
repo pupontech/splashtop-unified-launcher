@@ -19,10 +19,13 @@ internal static class InventoryFixture
         "<table id='computers'>" +
         "  <thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
         "  <tbody>" +
-        Row("Fixture Desktop", "fixture-desktop", "Default Group", "", true) +
-        Row("Fixture Server", "fixture-server", "Servers", "lab", true) +
-        Row("Fixture VM", "fixture-vm", "VMs", "", true) +
+        Row("Fixture Desktop", "fixture-desktop", "Default Group", string.Empty, true, "Online") +
+        Row("Fixture Server", "fixture-server", "Servers", "lab", true, "Offline") +
+        Row("Fixture VM", "fixture-vm", "VMs", string.Empty, true, "In use") +
         Row("Fixture VM", "fixture-vm-2", "VMs", "duplicate display name", false) +
+        // Device name contains a status word but the row carries no indicator, so no status
+        // may be inferred from the name.
+        Row("Fixture Backup", "online-backup-01", "Default Group", string.Empty, false) +
         "  </tbody>" +
         "</table></body></html>";
 
@@ -113,9 +116,11 @@ internal static class InventoryFixture
         "<button id='opt-web' onclick=\"window.__chooserChoice='web'\">From the Web App in this browser</button>" +
         "</div></body></html>";
 
-    private static string Row(string name, string device, string group, string notes, bool connect) =>
+    private static string Row(string name, string device, string group, string notes, bool connect, string? status = null) =>
         "<tr>" +
-        $"<td><span class='os-icon' aria-hidden='true'></span>{name}</td>" +
+        $"<td><span class='os-icon' aria-hidden='true'></span>" +
+        (status is null ? string.Empty : $"<span class='status-dot' aria-label='{status}' title='{status}'></span>") +
+        $"{name}</td>" +
         $"<td>{device}</td><td>{group}</td><td>{notes}</td>" +
         "<td>" + (connect ? "<button class='row-connect' aria-label='Connect' title='Connect' onclick=\"window.__connectClicks=(window.__connectClicks||0)+1\">Connect</button>" : string.Empty) + "</td>" +
         "<td><button class='row-menu' aria-label='More actions' title='More'>...</button></td>" +

@@ -217,13 +217,19 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.credentialSaving.generalAutofillEnabled -ne $true) {
         throw 'Engine-managed password saving was not enabled in both isolated account profiles.'
     }
-    if ($runtimeResult.inventory.capturedRows -ne 4 -or
+    if ($runtimeResult.inventory.capturedRows -ne 5 -or
         $runtimeResult.inventory.duplicateDisplayNamesRetained -ne 2 -or
         $runtimeResult.inventory.rowsWithConnectControl -ne 3 -or
         $runtimeResult.inventory.connectActivatedOnce -ne $true -or
         $runtimeResult.inventory.staleRowRefused -ne $true -or
         $runtimeResult.inventory.signInOutcome -ne 'Unavailable') {
         throw 'Real WebView2 unified-list extraction or Connect routing proof is missing or failed.'
+    }
+    if ($runtimeResult.inventory.rowsWithStatus -ne 3 -or
+        $runtimeResult.inventory.onlineRows -ne 1 -or
+        $runtimeResult.inventory.offlineRows -ne 1 -or
+        $runtimeResult.inventory.statusNotInferredFromDeviceName -ne $true) {
+        throw 'The online/offline status column was not read from the row indicators, or a status was inferred from a device name.'
     }
     if ($runtimeResult.inventory.pagedRowsCaptured -ne 9 -or
         $runtimeResult.inventory.pagedOutcome -ne 'Complete' -or
@@ -362,10 +368,11 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 2. Extract the complete ZIP to a writable folder. Keep `START.bat`, the application executable, `WebView2Loader.dll`, the managed WebView2 assemblies, and all other files together.
 3. Double-click `START.bat` (or run `SplashtopUnified.AccountBrowser.exe`).
 4. Sign in only on the official Splashtop page inside the app. Complete any MFA, SSO, CAPTCHA, or new-device verification normally. Your browser login can be remembered: each account has its own isolated browser profile, and the engine may offer to save and reuse the console password inside that profile. The app itself never reads, asks for, or stores the password, and it does not export cookies or tokens.
-5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
-6. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
-7. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
-8. Pressing `Connect` shows Splashtop's own connect choice as a prompt in this window: `From the Splashtop Business App` or `From the Web App in this browser`, plus `Cancel`. Your answer is applied inside the owning account's console, so the console's own dialog does not need to be found in the split view. If no chooser appears, Splashtop started the session directly and the status line says so.
+5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes, plus each row's own online/offline indicator), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
+6. The `Status` column shows what the console's indicators say (for example `Online`, `Offline`, `In use`) and the summary line reports how many rows are online. If a list shows no indicators, the column stays blank and the summary says status was not reported - the app never guesses a status from a device name or anything else.
+7. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
+8. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
+9. Pressing `Connect` shows Splashtop's own connect choice as a prompt in this window: `From the Splashtop Business App` or `From the Web App in this browser`, plus `Cancel`. Your answer is applied inside the owning account's console, so the console's own dialog does not need to be found in the split view. If no chooser appears, Splashtop started the session directly and the status line says so.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 

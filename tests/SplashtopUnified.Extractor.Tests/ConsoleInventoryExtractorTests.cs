@@ -192,6 +192,46 @@ public sealed class ConsoleInventoryExtractorTests
         Assert.False(ConsoleInventoryExtractor.TryParse(malformed, out _));
     }
 
+    [Fact]
+    public void PresenceStatusIsCarriedOnlyWhenTheRowStatesIt()
+    {
+        var json = Message("incomplete", "computerList", "authenticated", 3, null,
+            """{"name":"Fixture Online","deviceName":"a","group":"","notes":"","hasConnectControl":true,"status":"Online"}""",
+            """{"name":"Fixture Offline","deviceName":"b","group":"","notes":"","hasConnectControl":true,"status":"Offline"}""",
+            """{"name":"Fixture Online Backup","deviceName":"online-backup-01","group":"","notes":"","hasConnectControl":false}""");
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(json, out var read));
+        Assert.Equal("Online", read!.Rows[0].Status);
+        Assert.Equal("Offline", read.Rows[1].Status);
+        Assert.Null(read.Rows[2].Status);
+    }
+
+    [Fact]
+    public void AnEmptyStatusStringIsTreatedAsNotReported()
+    {
+        var json = Message("incomplete", "computerList", "authenticated", 1, null,
+            """{"name":"Fixture","deviceName":"a","group":"","notes":"","hasConnectControl":true,"status":""}""");
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(json, out var read));
+        Assert.Null(read!.Rows[0].Status);
+    }
+
+    [Fact]
+    public void MalformedStatusValuesAreRejected()
+    {
+        const string template = """{"name":"Fixture","deviceName":"a","group":"","notes":"","hasConnectControl":true,"status":STATUS}""";
+        var withControlCharacter = template.Replace("STATUS", """{"text"}""".Replace("text", "Online\u0007"), StringComparison.Ordinal);
+        var tooLong = template.Replace("STATUS", "\"" + new string('x', 80) + "\"", StringComparison.Ordinal);
+        var notAString = template.Replace("STATUS", "42", StringComparison.Ordinal);
+
+        Assert.False(ConsoleInventoryExtractor.TryParse(Hosted(withControlCharacter), out _));
+        Assert.False(ConsoleInventoryExtractor.TryParse(Hosted(tooLong), out _));
+        Assert.False(ConsoleInventoryExtractor.TryParse(Hosted(notAString), out _));
+    }
+
+    private static string Hosted(string row) =>
+        Message("incomplete", "computerList", "authenticated", 1, null).Replace("\"rows\":[]", "\"rows\":[" + row + "]", StringComparison.Ordinal);
+
     private static string Message(string outcome, string pageKind, string authentication, int rowCount, int? reportedTotal, params string[] rows)
     {
         var total = reportedTotal is null ? "null" : reportedTotal.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);

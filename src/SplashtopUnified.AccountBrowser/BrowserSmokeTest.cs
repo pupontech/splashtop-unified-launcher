@@ -246,11 +246,17 @@ internal static class BrowserSmokeTest
         var read = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList);
         Require(read.Authentication == ConsoleAuthentication.Authenticated, "The fixture list is recognised as an authenticated console");
         Require(read.Outcome == InventoryOutcome.Incomplete, "A list without a console-reported total is reported as incomplete, never complete");
-        Require(read.Rows.Count == 4, "All four fixture rows are extracted");
+        Require(read.Rows.Count == 5, "All five fixture rows are extracted");
         Require(read.Rows.Count(row => row.Name == "Fixture VM") == 2, "Duplicate display names are retained, never merged");
         Require(read.Rows.Count(row => row.HasConnectControl) == 3, "Rows that expose a Connect control are marked as such");
         Require(read.Rows[1].Group == "Servers", "The Group column is read from the fixture row");
         Require(read.Rows[1].Notes == "lab", "The Notes column is read from the fixture row");
+        Require(read.Rows.Count(row => row.Status is { Length: > 0 }) == 3, "Rows that carry a presence indicator report a status");
+        Require(read.Rows[0].Status == "Online", "The online indicator is read from the row's own indicator");
+        Require(read.Rows[1].Status == "Offline", "An offline indicator is reported as offline");
+        Require(read.Rows[2].Status == "In use", "A non-online/offline indicator is reported verbatim");
+        Require(read.Rows.Single(row => row.Name == "Fixture Backup").Status is null,
+            "A device name that contains a status word is never treated as a status");
 
         var firstConnect = await pane.ActivateConnectAsync(0);
         Require(firstConnect == "clicked", "Connect activates the owning page's own row control");
@@ -318,6 +324,10 @@ internal static class BrowserSmokeTest
             capturedRows = read.Rows.Count,
             duplicateDisplayNamesRetained = read.Rows.Count(row => row.Name == "Fixture VM"),
             rowsWithConnectControl = read.Rows.Count(row => row.HasConnectControl),
+            rowsWithStatus = read.Rows.Count(row => row.Status is { Length: > 0 }),
+            onlineRows = read.Rows.Count(row => string.Equals(row.Status, "Online", StringComparison.OrdinalIgnoreCase)),
+            offlineRows = read.Rows.Count(row => string.Equals(row.Status, "Offline", StringComparison.OrdinalIgnoreCase)),
+            statusNotInferredFromDeviceName = read.Rows.Single(row => row.Name == "Fixture Backup").Status is null,
             outcome = read.Outcome.ToString(),
             connectActivatedOnce = clickCount.Trim() == "1",
             staleRowRefused = missingRow == "no-row",
