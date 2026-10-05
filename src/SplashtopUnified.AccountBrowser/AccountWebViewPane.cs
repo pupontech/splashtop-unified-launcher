@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
@@ -11,6 +12,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly WebView2 _webView = new();
     private readonly Action<string> _status;
     private readonly BusinessAppHandoff _businessAppHandoff;
+    private readonly NativeHandoffArm _nativeArm = new();
     private readonly Action<string, string, bool>? _handoffEventObserver;
     private readonly List<PopupWindow> _popups = [];
     private CoreWebView2Environment? _environment;
@@ -164,6 +166,86 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         core.NavigationStarting += OnNavigationStarting;
         core.NewWindowRequested += OnNewWindowRequested;
         core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
+        InstallNativePreference(core, _nativeArm, _status);
+    }
+
+    /// <summary>
+    /// Installs the documented-chooser preference script and opens the bounded
+    /// host allowance only for a validated "armed" message from the exact console.
+    /// </summary>
+    private static void InstallNativePreference(CoreWebView2 core, NativeHandoffArm arm, Action<string> status)
+    {
+        _ = core.AddScriptToExecuteOnDocumentCreatedAsync(NativeConnectionPreference.InstallScript)
+            .ContinueWith(
+                task => status("The automatic Business-app preference could not be installed on this page; the connection chooser was left untouched."),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        core.WebMessageReceived += (_, args) => HandleNativePreferenceMessage(args, arm, status);
+    }
+
+    private static void HandleNativePreferenceMessage(
+        CoreWebView2WebMessageReceivedEventArgs args,
+        NativeHandoffArm arm,
+        Action<string> status)
+    {
+        if (!Uri.TryCreate(args.Source, UriKind.Absolute, out var source) ||
+            !string.Equals(source.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(source.Host, "my.splashtop.com", StringComparison.OrdinalIgnoreCase) ||
+            source.UserInfo.Length != 0 || !source.IsDefaultPort)
+        {
+            return;
+        }
+
+        string json;
+        try
+        {
+            json = args.TryGetWebMessageAsString();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(json) || json.Length > 2048)
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("source", out var sourceProperty) ||
+                sourceProperty.ValueKind != JsonValueKind.String ||
+                !string.Equals(sourceProperty.GetString(), NativeConnectionPreference.MessageSource, StringComparison.Ordinal) ||
+                !root.TryGetProperty("version", out var versionProperty) ||
+                versionProperty.ValueKind != JsonValueKind.Number ||
+                !versionProperty.TryGetInt32(out var version) ||
+                version != NativeConnectionPreference.ScriptVersion ||
+                !root.TryGetProperty("type", out var typeProperty) ||
+                typeProperty.ValueKind != JsonValueKind.String)
+            {
+                return;
+            }
+
+            var type = typeProperty.GetString();
+            switch (type)
+            {
+                case "armed":
+                    arm.Open();
+                    status("Connect was recognised. Preferring the Splashtop Business app for this connection.");
+                    break;
+                case "failed":
+                    status("Could not prepare the Business-app preference on this page; use the connection chooser shown by Splashtop.");
+                    break;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore non-JSON or unrelated page messages.
+        }
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -195,12 +277,12 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     private void HandleBusinessAppUri(string uri, string? initiatingOrigin, bool isUserInitiated) =>
-        HandleBusinessAppUri(uri, initiatingOrigin, isUserInitiated, _status, _businessAppHandoff);
+        HandleBusinessAppUri(uri, initiatingOrigin, isUserInitiated, _status, _businessAppHandoff, _nativeArm);
 
     private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
     {
         _handoffEventObserver?.Invoke(nameof(OnNewWindowRequested), args.Uri, args.IsUserInitiated);
-        await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff);
+        await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _nativeArm);
     }
 
     private static async Task HandlePopupRequestAsync(
@@ -208,12 +290,13 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         CoreWebView2Environment? environment,
         List<PopupWindow> popups,
         Action<string> status,
-        BusinessAppHandoff businessAppHandoff)
+        BusinessAppHandoff businessAppHandoff,
+        NativeHandoffArm? nativeArm = null)
     {
         if (!IsPopupUri(args.Uri))
         {
             args.Handled = true;
-            HandleBusinessAppUri(args.Uri, args.OriginalSourceFrameInfo?.Source, args.IsUserInitiated, status, businessAppHandoff);
+            HandleBusinessAppUri(args.Uri, args.OriginalSourceFrameInfo?.Source, args.IsUserInitiated, status, businessAppHandoff, nativeArm);
             return;
         }
 
@@ -227,7 +310,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         var deferral = args.GetDeferral();
         try
         {
-            var popup = new PopupWindow(environment, popups, status, businessAppHandoff);
+            var popup = new PopupWindow(environment, popups, status, businessAppHandoff, nativeArm);
             popups.Add(popup);
             popup.Closed += (_, _) => popups.Remove(popup);
             await popup.InitializeAsync();
@@ -258,9 +341,14 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         string? initiatingOrigin,
         bool isUserInitiated,
         Action<string> status,
-        BusinessAppHandoff businessAppHandoff)
+        BusinessAppHandoff businessAppHandoff,
+        NativeHandoffArm? nativeArm = null)
     {
-        switch (businessAppHandoff.TryDispatch(uri, initiatingOrigin, isUserInitiated))
+        // The documented chooser's own follow-up arrives as not user initiated.
+        // Accept it only inside a bounded, host-owned allowance opened by a
+        // validated trusted Connect gesture, and consume it on use.
+        var trustedArmActive = !isUserInitiated && nativeArm is not null && nativeArm.Consume();
+        switch (businessAppHandoff.TryDispatch(uri, initiatingOrigin, isUserInitiated, trustedArmActive))
         {
             case BusinessAppHandoffResult.Dispatched:
                 status("Opening the Splashtop Business app for the remote session.");
@@ -280,13 +368,15 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         private readonly List<PopupWindow> _popups;
         private readonly Action<string> _status;
         private readonly BusinessAppHandoff _businessAppHandoff;
+        private readonly NativeHandoffArm? _nativeArm;
 
-        public PopupWindow(CoreWebView2Environment environment, List<PopupWindow> popups, Action<string> status, BusinessAppHandoff businessAppHandoff)
+        public PopupWindow(CoreWebView2Environment environment, List<PopupWindow> popups, Action<string> status, BusinessAppHandoff businessAppHandoff, NativeHandoffArm? nativeArm = null)
         {
             _environment = environment;
             _popups = popups;
             _status = status;
             _businessAppHandoff = businessAppHandoff;
+            _nativeArm = nativeArm;
             Title = "Sign-in window · isolated account profile";
             Width = 920;
             Height = 700;
@@ -306,20 +396,24 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             core.NavigationStarting += OnNavigationStarting;
             core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
             core.NewWindowRequested += OnNewWindowRequested;
+            if (_nativeArm is not null)
+            {
+                InstallNativePreference(core, _nativeArm, _status);
+            }
         }
 
         private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args) =>
-            await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff);
+            await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _nativeArm);
 
         private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
         {
-            HandleNavigationStarting(args, WebView.CoreWebView2?.Source, _status, _businessAppHandoff);
+            HandleNavigationStarting(args, WebView.CoreWebView2?.Source, _status, _businessAppHandoff, _nativeArm);
         }
 
         private void OnLaunchingExternalUriScheme(object? sender, CoreWebView2LaunchingExternalUriSchemeEventArgs args)
         {
             args.Cancel = true;
-            HandleBusinessAppUri(args.Uri, args.InitiatingOrigin, args.IsUserInitiated, _status, _businessAppHandoff);
+            HandleBusinessAppUri(args.Uri, args.InitiatingOrigin, args.IsUserInitiated, _status, _businessAppHandoff, _nativeArm);
         }
     }
 
@@ -327,7 +421,8 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         CoreWebView2NavigationStartingEventArgs args,
         string? initiatingOrigin,
         Action<string> status,
-        BusinessAppHandoff businessAppHandoff)
+        BusinessAppHandoff businessAppHandoff,
+        NativeHandoffArm? nativeArm = null)
     {
         if (IsWebUri(args.Uri))
         {

@@ -38,9 +38,18 @@ public sealed class BusinessAppHandoff
         }
     }
 
-    public static bool IsAllowedRequest(string? uriValue, string? initiatingOrigin, bool isUserInitiated)
+    public static bool IsAllowedRequest(string? uriValue, string? initiatingOrigin, bool isUserInitiated) =>
+        IsAllowedRequest(uriValue, initiatingOrigin, isUserInitiated, trustedArmActive: false);
+
+    /// <summary>
+    /// <paramref name="trustedArmActive"/> is host-owned state opened only by the
+    /// documented chooser script after an actual trusted Connect gesture. It never
+    /// fabricates a user gesture; it only allows the chooser's own follow-up URI,
+    /// which WebView2 reports as not user initiated, within a bounded window.
+    /// </summary>
+    public static bool IsAllowedRequest(string? uriValue, string? initiatingOrigin, bool isUserInitiated, bool trustedArmActive)
     {
-        if (!isUserInitiated || string.IsNullOrEmpty(uriValue) || string.IsNullOrEmpty(initiatingOrigin) ||
+        if ((!isUserInitiated && !trustedArmActive) || string.IsNullOrEmpty(uriValue) || string.IsNullOrEmpty(initiatingOrigin) ||
             uriValue.Any(char.IsControl) ||
             !Uri.TryCreate(uriValue, UriKind.Absolute, out var target) ||
             !string.Equals(target.Scheme, "st-business", StringComparison.OrdinalIgnoreCase) ||
@@ -57,9 +66,9 @@ public sealed class BusinessAppHandoff
                origin.UserInfo.Length == 0 && origin.IsDefaultPort;
     }
 
-    public BusinessAppHandoffResult TryDispatch(string? uri, string? initiatingOrigin, bool isUserInitiated)
+    public BusinessAppHandoffResult TryDispatch(string? uri, string? initiatingOrigin, bool isUserInitiated, bool trustedArmActive = false)
     {
-        if (!IsAllowedRequest(uri, initiatingOrigin, isUserInitiated))
+        if (!IsAllowedRequest(uri, initiatingOrigin, isUserInitiated, trustedArmActive))
         {
             return BusinessAppHandoffResult.Rejected;
         }
