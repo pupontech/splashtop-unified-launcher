@@ -187,8 +187,13 @@ function Invoke-AccountBrowserSmokeTest {
         if (-not $fullUserDataFolder.StartsWith($expectedChildPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Account Browser --smoke-test ($EnvironmentName) created an account profile outside its dedicated CI smoke root."
         }
-        $localState = Join-Path $fullUserDataFolder 'Local State'
-        if (-not (Test-Path -LiteralPath $localState -PathType Leaf)) {
+        # WebView2 keeps browser state beneath EBWebView on current runtimes.
+        $stateCandidates = @(
+            (Join-Path $fullUserDataFolder 'EBWebView/Local State'),
+            (Join-Path $fullUserDataFolder 'Local State')
+        )
+        $localState = $stateCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($localState)) {
             throw "Account Browser --smoke-test ($EnvironmentName) returned 0 but did not create WebView2's runtime-generated Local State file for both isolated accounts."
         }
         $stateBytes = (Get-Item -LiteralPath $localState).Length
