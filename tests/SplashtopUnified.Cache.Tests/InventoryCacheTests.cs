@@ -416,9 +416,11 @@ public sealed class InventoryCacheTests
     [Fact]
     public void CachePathIsUnderTheProvidedPerUserLocalAppDataDirectory()
     {
-        var path = InventoryCache.GetPath("/users/alice/AppData/Local");
+        using var directory = new TemporaryDirectory();
+        var localAppData = Path.Combine(directory.Path, "AppData", "Local");
+        var path = InventoryCache.GetPath(localAppData);
 
-        Assert.Equal(Path.Combine("/users/alice/AppData/Local", "SplashtopUnified", "AccountBrowser", "inventory-cache.json"), path);
+        Assert.Equal(Path.Combine(localAppData, "SplashtopUnified", "AccountBrowser", "inventory-cache.json"), path);
     }
 
     [Theory]

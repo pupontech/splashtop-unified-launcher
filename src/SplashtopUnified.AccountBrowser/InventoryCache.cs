@@ -181,7 +181,13 @@ internal static class InventoryCache
                     stream.Flush(flushToDisk: true);
                 }
 
-                File.Move(temporaryPath, fullPath, overwrite: true);
+                // Use the OS replacement primitive for an existing cache: unlike an
+                // overwrite-move, it preserves atomic replacement under Windows readers
+                // opened with FileShare.Delete. The writer mutex serializes creators.
+                if (File.Exists(fullPath))
+                    File.Replace(temporaryPath, fullPath, destinationBackupFileName: null);
+                else
+                    File.Move(temporaryPath, fullPath);
             }
             finally
             {
