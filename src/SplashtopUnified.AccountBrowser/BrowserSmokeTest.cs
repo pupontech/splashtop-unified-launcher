@@ -380,8 +380,9 @@ internal static class BrowserSmokeTest
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count >= 5),
             "the virtual duplicate fixture to reach the end of its scroll walk");
         var virtualIdentical = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count >= 5);
-        Require(virtualIdentical.Outcome == InventoryOutcome.Incomplete,
-            "A no-total virtual walk with indistinguishable duplicate rows cannot claim Complete");
+        RequireVirtual(virtualIdentical.Outcome == InventoryOutcome.Incomplete && virtualIdentical.ReportedTotal is null &&
+                virtualIdentical.Mode == "scrolled" && virtualIdentical.Rows.Count >= 5,
+            "A no-total virtual walk with indistinguishable duplicate rows cannot claim Complete", virtualIdentical);
 
         // A virtualised list that only renders the rows near the viewport must still be read in full.
         var virtualisedStartedAt = DateTimeOffset.Now;
@@ -391,9 +392,10 @@ internal static class BrowserSmokeTest
             "the virtualised fixture to be walked past its first window");
         var virtualisedWallMillis = (int)(DateTimeOffset.Now - virtualisedStartedAt).TotalMilliseconds;
         var virtualised = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 18);
-        Require(virtualised.Rows.Count == 18, "All eighteen virtualised rows are captured, not only the rendered window");
-        Require(virtualised.Outcome == InventoryOutcome.Complete, "Scrolling to the end and matching the console total is reported as complete");
-        Require(virtualised.Rows.Any(row => row.Name == "Fixture Node 18"), "A row that is only rendered after scrolling is captured");
+        RequireVirtual(virtualised.Rows.Count == 18 && virtualised.ReportedTotal == 18 &&
+                virtualised.Outcome == InventoryOutcome.Complete && virtualised.Mode == "scrolled" &&
+                virtualised.Rows.Any(row => row.Name == "Fixture Node 18"),
+            "The 18-row virtual walk captures the final row and reconciles its exact console total", virtualised);
 
         // A long account: 240 rows rendered a window at a time. This is the case that used to
         // take tens of seconds because every scroll step waited a fixed interval.
@@ -405,26 +407,31 @@ internal static class BrowserSmokeTest
             TimeSpan.FromSeconds(30));
         var largeWallMillis = (int)(DateTimeOffset.Now - largeStartedAt).TotalMilliseconds;
         var large = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
-        Require(large.Rows.Count == 240, $"All 240 rows of a long account are captured (got {large.Rows.Count}, mode {large.Mode}, total {large.ReportedTotal})");
-        Require(large.Outcome == InventoryOutcome.Complete,
-            $"Walking a long virtualised list to the end is reported as complete (got {large.Outcome}, mode {large.Mode}, rows {large.Rows.Count}, total {large.ReportedTotal}, pages {large.PagesVisited})");
-        Require(large.Rows.Any(row => row.Name == "Fixture Node 240"), "The last row of a long account is captured");
-        Require(largeWallMillis < 15000, "Reading a 240-row virtualised account stays inside the refresh budget");
-        Require(large.WalkMillis < 12000, "The long-list walk itself stays inside its budget");
+        RequireVirtual(large.Rows.Count == 240 && large.ReportedTotal == 240 &&
+                large.Outcome == InventoryOutcome.Complete && large.Mode == "scrolled" &&
+                large.Rows.Any(row => row.Name == "Fixture Node 240"),
+            "The 240-row virtual walk captures the final row and reconciles its exact console total", large);
+        RequireVirtual(largeWallMillis < 15000,
+            "Reading a 240-row virtualised account stays inside the refresh budget", large, wallMillis: largeWallMillis);
+        RequireVirtual(large.WalkMillis < 12000,
+            "The 240-row virtual walk itself stays inside its budget", large, wallMillis: largeWallMillis);
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/short-viewport.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 24 && item.ReportedTotal == 24),
             "the 48-pixel viewport fixture to walk with overlap");
         var shortViewport = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 24 && item.ReportedTotal == 24);
-        Require(shortViewport.Outcome == InventoryOutcome.Complete && shortViewport.Rows.Any(row => row.Name == "Fixture Node 24"),
-            "A short viewport uses overlapping steps and retains the final unique row");
+        RequireVirtual(shortViewport.Outcome == InventoryOutcome.Complete && shortViewport.Mode == "scrolled" &&
+                shortViewport.ReportedTotal == 24 && shortViewport.Rows.Count == 24 &&
+                shortViewport.Rows.Any(row => row.Name == "Fixture Node 24"),
+            "A short viewport uses overlapping steps and retains the final unique row", shortViewport);
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/slow-repaint.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24),
             "a slow repaint to stop as an incomplete read", TimeSpan.FromSeconds(15));
         var slowRepaint = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24);
-        Require(slowRepaint.Outcome == InventoryOutcome.Incomplete,
-            "A repaint that misses the bounded page deadline fails closed instead of claiming completeness");
+        RequireVirtual(slowRepaint.Outcome == InventoryOutcome.Incomplete && slowRepaint.Mode == "scrolled" &&
+                slowRepaint.ReportedTotal == 24 && slowRepaint.Rows.Count < 24,
+            "A repaint that misses the bounded page deadline fails closed instead of claiming completeness", slowRepaint);
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/reconciled-scrollable.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 5 && item.Rows.Count == 5),
@@ -570,6 +577,19 @@ internal static class BrowserSmokeTest
         Require(state.RootElement.GetProperty("local").GetString() == expected, "Local storage account isolation/persistence");
         if (checkSession) Require(state.RootElement.GetProperty("session").GetString() == expected, "Session storage account isolation");
     }
+    // Called only for locally generated synthetic virtual-list fixtures. Keep diagnostics
+    // to bounded counters/enums; never include row values, URLs, account data or page text.
+    private static void RequireVirtual(bool condition, string name, AccountInventorySnapshot read, int? wallMillis = null)
+    {
+        if (condition) return;
+        var wall = wallMillis is null ? string.Empty : $", wallMs={wallMillis.Value}";
+        throw new InvalidOperationException(
+            $"Failed synthetic virtual-walk assertion: {name} " +
+            $"(outcome={read.Outcome}, mode={read.Mode ?? "<none>"}, rows={read.Rows.Count}, " +
+            $"reportedTotal={read.ReportedTotal?.ToString() ?? "<none>"}, pagesVisited={read.PagesVisited}, " +
+            $"walkMs={read.WalkMillis}{wall}).");
+    }
+
     private static void Require(bool condition, string name)
     {
         if (!condition) throw new InvalidOperationException("Failed real WebView2 assertion: " + name);

@@ -223,12 +223,12 @@ internal static class ConsoleInventoryExtractor
           return count + '|' + first + '|' + last + '|' + (pager.valid ? pager.pageToken : '');
         };
 
-        var waitForChange = function (signature, maxMillis) {
+        var waitForChange = function (signature, maxMillis, repaint) {
           var started = now();
           return (function poll() {
             if (now() - started >= maxMillis || now() >= walkDeadline) { return Promise.resolve(false); }
             return sleep(Math.min(40, Math.max(1, maxMillis - (now() - started)))).then(function () {
-              if (signatureOf() !== signature) { return sleep(40).then(function () { return true; }); }
+              if (signatureOf() !== signature || (repaint && repaint.changed)) { return sleep(40).then(function () { return true; }); }
               return poll();
             });
           })();
@@ -395,8 +395,18 @@ internal static class ConsoleInventoryExtractor
                     break;
                   }
                   var scrollSignature = signatureOf();
-                  scroller.scrollTop = targetTop;
-                  var painted = await waitForChange(scrollSignature, Math.min(1000, Math.max(0, walkDeadline - now())));
+                  // An overlapping step may repaint the same logical window (for example
+                  // a 38px step in a 40px row). Observe actual row-tree replacement rather
+                  // than mistaking an unchanged text fingerprint for a hung renderer.
+                  // Unrelated document mutations and scrolling alone are not evidence.
+                  var repaint = { changed: false };
+                  var observer = new MutationObserver(function () { repaint.changed = true; });
+                  observer.observe(grid, { childList: true, subtree: true, characterData: true });
+                  var painted;
+                  try {
+                    scroller.scrollTop = targetTop;
+                    painted = await waitForChange(scrollSignature, Math.min(1000, Math.max(0, walkDeadline - now())), repaint);
+                  } finally { observer.disconnect(); }
                   if (!painted) { break; }
                   collect(grid, seen, rows, false);
                   if (reportedTotal !== null && rows.length === reportedTotal) { break; }

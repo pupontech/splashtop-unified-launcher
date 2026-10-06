@@ -1,26 +1,26 @@
-# Windows prototype quickstart
+# Unified live account browser — prototype quickstart
 
-1. Download the versioned ZIP and verify its published SHA-256 with `Get-FileHash -Algorithm SHA256`.
-2. Extract the complete ZIP into a writable folder. Double-click `START.bat`. Windows 10/11 x64; no .NET SDK/runtime installation or administrator rights required. This is an unsigned prototype; follow your organization's SmartScreen policy.
-3. Add an account display name, optional email, and official HTTPS Splashtop console URL. No password is requested.
-4. Select that account in the import selector and import your local CSV. Repeat for other accounts; their inventories appear in one combined list.
-5. Search or filter by account/status/favorites. Group names can be searched; a dedicated group selector is not included in this first prototype.
-6. Favorites and aliases require an actual computer ID. ID-less rows remain visible, but these editors are disabled rather than inventing an identity. Local data persists in `%LOCALAPPDATA%\SplashtopUnified\Prototype\inventory.json`; treat this file as private.
-7. Open Console opens the configured official account console in your browser. It does not connect to or target the selected device. Use the official Splashtop app/console for remote sessions.
+This is a Windows WPF/WebView2 testing prototype for a unified computer list from two isolated Splashtop Business accounts. It is not a CSV/import application and is not a production release. Read the included README and this document before use.
 
-## CSV headers
+## Get and start the prototype
 
-Required: `Name` or `Computer Name`. Optional: `ID` or `Computer ID`, `MAC` or `MAC Address`, `Group`, `Status`. Quoted commas/newlines and UTF-8 BOM are supported. Unknown numeric IDs remain absent; malformed IDs and duplicate complete IDs reject the import without replacing prior inventory. Header mappings have not been verified against every current Splashtop export.
+1. Download only an already-published prerelease ZIP from the project's GitHub Releases page. Do not guess a version or use an unverified branch/build as a release download. A pushed candidate is not a published or verified release. If no suitable published prerelease is available, wait for the owner to provide the verified artifact.
+2. Verify the ZIP SHA-256 against the value published alongside that exact asset, then extract the complete archive to a writable folder. Use its included launcher/README. No .NET runtime installation is intended; the official Microsoft Edge WebView2 Evergreen Runtime is required. The official Splashtop Business app is needed only for the native-app handoff option. This prototype is unsigned; follow your organization's SmartScreen policy.
+3. On first start, two account slots are created. In Account settings, give each a useful label and set its official console URL to `https://my.splashtop.com/` or `https://my.splashtop.eu/`. Both may use the same region. Other schemes, hosts, user-info and non-default ports are rejected.
+4. Sign into each official console separately in its own side-by-side browser pane. Complete MFA, SSO, CAPTCHA and device verification yourself in the normal vendor flow. The browser profiles are persistent and isolated; they are not shared between the two accounts. The host does not export passwords, cookies or tokens.
+5. Open the unified list and choose **Refresh from consoles**. The prototype reads the visible computers table from each account. Check each account's result, count and read time against the actual console. Unknown totals remain unknown. An incomplete, unavailable or ambiguous read is not a complete inventory.
+6. Search the merged list by account, name, status, device name, group or notes. Rows are not merged by name: the console list exposes no numeric identity to establish that two same-named rows are the same computer.
+7. Select a row and choose **Connect** only after checking the account and computer. Confirm the host prompt. The app asks that account's own official console to open its Connect flow, then presents only choices actually observed in the console chooser. The native Business-app handoff requires a further explicit confirmation. The console remains the authority for target and connection outcome; never assume that a request means a session connected. A cached, stale, partial, failed or otherwise incomplete row cannot Connect; refresh the account first.
+8. Exit normally. Account configuration, WebView2 profiles and the allowlisted inventory cache reside under `%LOCALAPPDATA%\SplashtopUnified\AccountBrowser\`. The cache is JSON (`inventory-cache.json`), not SQLite. It is historical display data only, not connection authority. Treat account labels and cached computer names/device names/groups as potentially sensitive. Keep them out of bug reports and repository history.
 
-Synthetic example (not real device data):
+## How to read displayed state
 
-```csv
-Name,ID,MAC,Group,Status
-SYNTHETIC-WS-01,10001,02:00:00:00:00:01,Lab,Online
-```
+Status is collected only from supported semantic indicators actually rendered by a row. Missing indicators stay unknown; color alone is not interpreted. Cached/last-read status is historical, not live, and this application does not monitor device status in the background. A complete current read is still only a snapshot of the console. Refresh manually to read again.
 
-## Verified scope and limits
+The extractor is deliberately conservative: it uses visible column labels, verified paging or a structurally verified virtual-scroll container, and bounded walks. Duplicate rows across verified pages are retained. Indistinguishable duplicates during virtual scrolling make that read incomplete. A console total that does not reconcile, an unrecognized layout or a failed walk must not be treated as complete.
 
-Hosted Windows CI exercises Release build, Core/CSV tests, actual shared UI-import-pipeline regression assertions, executable startup/close, and synthetic JSON save/reload. Full interactive click-by-click UI automation is not claimed. Live Splashtop account/client behavior remains untested.
+## Owner validation required before accepting a fixed version
 
-This is a manual local inventory browser, not authenticated automatic synchronization. Imported online/offline status is last-known CSV data, never proof of current device status. No direct `st-business:` session launching is included. No private APIs, cookies, credential storage, or MFA bypass. Keep your real CSV/state local and out of bug reports.
+Use the exact published prerelease ZIP and record its version/tag, asset name, SHA-256, byte size, commit and workflow/run URL. Do not substitute a guessed version or a local build. Follow every item in [PROTOTYPE-ACCEPTANCE.md](PROTOTYPE-ACCEPTANCE.md). In brief: verify archive/manifest and clean extraction; start on supported Windows as a standard user with WebView2 Runtime; sign in normally to both intended accounts; verify profile isolation and persistence across app restart; compare complete account inventories and supported status indicators against both live consoles (including paging/virtual scrolling and unknown/partial cases); confirm wrong-account/changed-row/cached/partial Connect attempts are refused; inspect the observed chooser and confirm the selected target in the official client/web flow; verify JSON cache placement and historical labels; inspect package and logs for private data; record failures and NOT RUN items. These are pending owner checks until evidence is recorded. Synthetic fixture results are not live console DOM evidence and cannot replace this checklist.
+
+No live account or client validation is claimed here. Do not bypass MFA or TLS protections, use private APIs, infer device identity from names, or automate recurring collection without appropriate vendor/legal review.

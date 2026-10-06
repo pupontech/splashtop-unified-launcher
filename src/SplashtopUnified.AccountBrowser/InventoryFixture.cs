@@ -88,7 +88,7 @@ internal static class InventoryFixture
         "{n:'Virtual 3',d:'virtual-3',g:'Synthetic',t:''},{n:'Virtual 4',d:'virtual-4',g:'Synthetic',t:''},{n:'Virtual 5',d:'virtual-5',g:'Synthetic',t:''}];" +
         "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');function render(){var start=Math.floor(scroller.scrollTop/40);" +
         "var slice=all.slice(start,start+3);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:40px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');" +
-        "table.style.transform='translateY('+(start*40)+'px');}scroller.addEventListener('scroll',render);render();</script></body></html>";
+        "table.style.transform='translateY('+(start*40)+'px)';}scroller.addEventListener('scroll',render);render();</script></body></html>";
 
     /// <summary>
     /// A virtualised list that only renders the rows near the viewport at any moment, the
@@ -111,7 +111,7 @@ internal static class InventoryFixture
             "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
             "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
-            $"<p>{total} computers</p>" +
+            $"<p role='status'>{total} computers</p>" +
             "<script>" +
             "var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
             "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');" +
@@ -144,7 +144,7 @@ internal static class InventoryFixture
             "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
             "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
-            $"<p>{total} computers</p>" +
+            $"<p role='status'>{total} computers</p>" +
             "<script>" +
             "var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
             "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');" +
