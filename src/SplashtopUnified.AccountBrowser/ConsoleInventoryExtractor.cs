@@ -90,7 +90,30 @@ internal static class ConsoleInventoryExtractor
           return text.length > limit ? text.slice(0, limit) : text;
         };
         var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
-        var wanted = ['name', 'device name', 'group', 'notes'];
+        var wanted = ['name', 'computer name', 'device name', 'group', 'notes'];
+        var normalizeHeader = function (value) { return clean(value, 64).toLowerCase(); };
+        var buildHeaderMap = function (grid) {
+          var nodes;
+          if (grid.tagName === 'TABLE') {
+            var head = grid.querySelector('thead');
+            if (!head || head.querySelectorAll('tr').length !== 1) { return null; }
+            nodes = Array.prototype.slice.call(head.querySelector('tr').children);
+            if (nodes.some(function (node) { return node.tagName !== 'TH' && node.tagName !== 'TD'; })) { return null; }
+          } else {
+            nodes = Array.prototype.slice.call(grid.querySelectorAll('[role=columnheader]'));
+          }
+          if (!nodes.length || nodes.some(function (node) { return !isVisible(node) || Number(node.colSpan || 1) !== 1 || Number(node.rowSpan || 1) !== 1; })) { return null; }
+          var result = { name: [], deviceName: [], group: [], notes: [] };
+          nodes.forEach(function (node, index) {
+            var text = normalizeHeader(node.textContent);
+            if (text === 'name' || text === 'computer name') { result.name.push(index); }
+            else if (text === 'device name') { result.deviceName.push(index); }
+            else if (text === 'group') { result.group.push(index); }
+            else if (text === 'notes') { result.notes.push(index); }
+          });
+          if (result.name.length !== 1 || result.deviceName.length !== 1 || result.group.length !== 1 || result.notes.length > 1) { return null; }
+          return { nodes: nodes, name: result.name[0], deviceName: result.deviceName[0], group: result.group[0], notes: result.notes.length ? result.notes[0] : null };
+        };
         var isVisible = function (node) {
           if (!node || !node.isConnected) { return false; }
           for (var current = node; current && current.nodeType === 1; current = current.parentElement) {
@@ -104,19 +127,13 @@ internal static class ConsoleInventoryExtractor
         var accessibleName = function (node) {
           return clean(node.getAttribute('aria-label') || node.innerText || node.textContent || '', 128);
         };
-        var headerTexts = function (grid) {
-          var nodes = grid.tagName === 'TABLE'
-            ? grid.querySelectorAll('thead th')
-            : grid.querySelectorAll('[role=columnheader],thead th,[role=row]:first-child th,[role=row]:first-child [role=gridcell]');
-          return Array.prototype.map.call(nodes, function (node) { return clean(node.textContent, 64).toLowerCase(); });
-        };
         var findGrid = function () {
           var candidates = Array.prototype.slice.call(document.querySelectorAll('table,[role=grid],[role=table]'));
-          var matches = candidates.filter(function (candidate) {
-            if (!isVisible(candidate)) { return false; }
-            var texts = headerTexts(candidate);
-            return wanted.every(function (header) { return texts.filter(function (text) { return text === header; }).length === 1; });
-          });
+          var matches = candidates.map(function (candidate) {
+            if (!isVisible(candidate)) { return null; }
+            var map = buildHeaderMap(candidate);
+            return map ? { grid: candidate, map: map } : null;
+          }).filter(Boolean);
           return matches.length === 1 ? matches[0] : null;
         };
 
@@ -133,13 +150,14 @@ internal static class ConsoleInventoryExtractor
           }
           return isVisible(element);
         };
-        var rowElements = function (grid) {
+        var rowElements = function (grid, map) {
           if (grid.tagName === 'TABLE') {
-            var body = grid.querySelector('tbody') || grid;
-            return Array.prototype.filter.call(body.querySelectorAll('tr'), function (tr) { return tr.querySelectorAll('td').length >= 3; });
+            var body = grid.querySelector('tbody');
+            if (!body) { return []; }
+            return Array.prototype.filter.call(body.querySelectorAll(':scope > tr'), function (tr) { return tr.querySelectorAll(':scope > td').length === map.nodes.length; });
           }
           return Array.prototype.filter.call(grid.querySelectorAll('[role=row]'), function (row) {
-            return row.querySelectorAll('[role=gridcell],[role=cell],td').length >= 3;
+            return row.querySelectorAll('[role=gridcell],[role=cell],td').length === map.nodes.length;
           });
         };
 
@@ -148,21 +166,21 @@ internal static class ConsoleInventoryExtractor
           return JSON.stringify([record.name, record.deviceName, record.group, record.notes,
             record.hasConnectControl, record.status]);
         };
-        var collect = function (grid, seen, rows, preserveMultiplicity) {
-          var nodes = rowElements(grid);
+        var collect = function (grid, columnMap, seen, rows, preserveMultiplicity) {
+          var nodes = rowElements(grid, columnMap);
           var sampleCounts = Object.create(null);
           var sampleRecords = [];
           for (var i = 0; i < nodes.length && rows.length < MAX_ROWS; i++) {
-            var cells = nodes[i].tagName === 'TABLE'
-              ? nodes[i].querySelectorAll('td')
+            var cells = grid.tagName === 'TABLE'
+              ? nodes[i].querySelectorAll(':scope > td')
               : nodes[i].querySelectorAll('[role=gridcell],[role=cell],td');
-            var name = clean(cells[0] ? cells[0].textContent : '', 512);
+            var name = clean(cells[columnMap.name] ? cells[columnMap.name].textContent : '', 512);
             if (!name) { continue; }
             var record = {
               name: name,
-              deviceName: clean(cells[1] ? cells[1].textContent : '', 512),
-              group: clean(cells[2] ? cells[2].textContent : '', 512),
-              notes: clean(cells[3] ? cells[3].textContent : '', 512),
+              deviceName: clean(cells[columnMap.deviceName] ? cells[columnMap.deviceName].textContent : '', 512),
+              group: clean(cells[columnMap.group] ? cells[columnMap.group].textContent : '', 512),
+              notes: columnMap.notes === null ? '' : clean(cells[columnMap.notes] ? cells[columnMap.notes].textContent : '', 512),
               hasConnectControl: false,
               status: null
             };
@@ -291,18 +309,20 @@ internal static class ConsoleInventoryExtractor
         };
 
         var hasPassword = !!document.querySelector('input[type=password]');
-        var grid = findGrid();
-        if (!grid) {
+        var gridMatch = findGrid();
+        if (!gridMatch) {
           postRead({ outcome: 'unavailable', pageKind: hasPassword ? 'login' : 'unknown',
             authentication: hasPassword ? 'required' : 'unknown', rowCount: 0, reportedTotal: null,
             rows: [], walkedToEnd: false, mode: 'none', pagesVisited: 0, walkMillis: 0 });
           return;
         }
+        var grid = gridMatch.grid;
+        var columnMap = gridMatch.map;
 
         var pagerInfo = findVerifiedPager(grid);
         var reportedTotal = pagerInfo.valid ? pagerInfo.total : (pagerInfo.present ? null : findResultCount());
         var seen = Object.create(null), rows = [];
-        collect(grid, seen, rows, true);
+        collect(grid, columnMap, seen, rows, true);
         var mode = 'single';
         var walkedToEnd = false;
         var pagesVisited = 1;
@@ -328,7 +348,7 @@ internal static class ConsoleInventoryExtractor
               if (!updatedPager.pageToken || visitedPages.has(updatedPager.pageToken)) { pageWalkFailed = true; break; }
               pagerInfo = updatedPager;
               visitedPages.add(pagerInfo.pageToken);
-              collect(grid, seen, rows, true);
+              collect(grid, columnMap, seen, rows, true);
               pagesVisited++;
               next = pagerInfo.next;
               if (reportedTotal !== null && rows.length === reportedTotal) { break; }
@@ -384,7 +404,7 @@ internal static class ConsoleInventoryExtractor
                 if (!await waitForChange(topSignature, Math.min(1000, Math.max(0, walkDeadline - now())))) { maxScrollTop = -1; }
               }
               if (maxScrollTop >= 0) {
-                collect(grid, seen, rows, false);
+                collect(grid, columnMap, seen, rows, false);
                 for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
                   if (reportedTotal !== null && rows.length === reportedTotal) { break; }
                   if (now() >= walkDeadline) { break; }
@@ -408,7 +428,7 @@ internal static class ConsoleInventoryExtractor
                     painted = await waitForChange(scrollSignature, Math.min(1000, Math.max(0, walkDeadline - now())), repaint);
                   } finally { observer.disconnect(); }
                   if (!painted) { break; }
-                  collect(grid, seen, rows, false);
+                  collect(grid, columnMap, seen, rows, false);
                   if (reportedTotal !== null && rows.length === reportedTotal) { break; }
                   if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) { walkedToEnd = true; break; }
                 }
@@ -466,7 +486,30 @@ internal static class ConsoleInventoryExtractor
         var host = currentUrl.hostname.toLowerCase();
         if (currentUrl.protocol !== 'https:' || currentUrl.port !== '' || currentUrl.username !== '' || currentUrl.password !== '' ||
             (host !== 'my.splashtop.com' && host !== 'my.splashtop.eu')) { return '{}'; }
-        var tables = document.querySelectorAll('table').length;
+        var tableNodes = Array.prototype.slice.call(document.querySelectorAll('table'));
+        var tables = tableNodes.length;
+        // Only fixed semantic tokens and structural counts leave the page. Unknown
+        // headings, cell contents, attributes and URLs are never returned.
+        var tableSchemas = tableNodes.slice(0, 8).map(function (table) {
+          var head = table.tHead;
+          var headerRow = head && head.rows.length === 1 ? head.rows[0] : null;
+          var cells = headerRow ? Array.prototype.slice.call(headerRow.cells) : [];
+          var body = table.tBodies.length ? table.tBodies[0] : null;
+          var rows = body ? Array.prototype.filter.call(body.rows, function (row) { return row.parentElement === body; }) : [];
+          return {
+            headerRows: head ? head.rows.length : 0,
+            headerCellCount: cells.length,
+            columns: cells.slice(0, 32).map(function (cell, index) {
+              var label = String(cell.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+              var token = label === 'name' ? 'name' : label === 'computer name' ? 'computerName' :
+                label === 'device name' ? 'deviceName' : label === 'group' ? 'group' : label === 'notes' ? 'notes' : 'other';
+              return { index: index, field: token, tag: cell.tagName === 'TH' ? 'th' : 'td',
+                columnSpan: cell.colSpan, rowSpan: cell.rowSpan };
+            }),
+            renderedRows: rows.length,
+            sampleCellCounts: rows.slice(0, 3).map(function (row) { return row.cells.length; })
+          };
+        });
         var roleGrids = document.querySelectorAll('[role=grid],[role=table]').length;
         var scrollers = Array.prototype.filter.call(document.querySelectorAll('div,[role=region],main,section'), function (node) {
           var style = window.getComputedStyle(node);
@@ -474,6 +517,7 @@ internal static class ConsoleInventoryExtractor
         }).length;
         return JSON.stringify({
           tables: tables,
+          tableSchemas: tableSchemas,
           roleGrids: roleGrids,
           roleRows: document.querySelectorAll('[role=row]').length,
           scrollContainers: scrollers,
@@ -712,7 +756,11 @@ internal static class ConsoleInventoryExtractor
 
             var diagnostic = outcome == InventoryOutcome.Complete
                 ? null
-                : $"Console read marked {outcome.ToString().ToLowerInvariant()}; the list exposes no numeric identity or guaranteed total.";
+                : outcome == InventoryOutcome.Unavailable
+                    ? pageKindText == "login" && authenticationText == "required"
+                        ? "Sign-in page detected; complete normal console sign-in."
+                        : "Computer list layout not recognized; this does not establish a sign-in failure. Use Inspect consoles to report the structural survey."
+                    : $"Console read marked {outcome.ToString().ToLowerInvariant()}; the list exposes no numeric identity or guaranteed total.";
 
             read = new ConsoleInventoryRead(
                 outcome,

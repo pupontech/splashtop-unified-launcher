@@ -57,3 +57,24 @@ control, two view-mode toggles, a filter control, and a search box.
 
 This document is evidence of UI text and column semantics only. It is not a captured DOM,
 and it authorizes no selectors beyond semantic header/label matching.
+
+## Owner-reported live layout mismatch
+
+An owner screenshot of the embedded signed-in **My Computers** page shows the heading
+`Computer Name`, rather than the older support image's `Name`, followed by distinct
+`Device Name` and `Group` headings. Icon actions are unlabeled visually. Horizontal
+clipping means the screenshot does not establish whether a `Notes` column exists.
+No private row values, account identifiers or screenshot are stored here.
+
+The prior reader required all four exact headings, including `Name` and `Notes`.
+A trusted-origin replay of the exact prior production script reproduced the reported
+failure by changing only the synthetic heading from `Name` to `Computer Name`: five
+visible synthetic rows became zero rows / `Unavailable`. This is a recognition defect,
+not evidence that the owner needs to authenticate again.
+
+Recognition and row/action interpretation must use the same unique semantic header
+map: `Name` or `Computer Name`, `Device Name`, `Group`, and optional `Notes`. Blank
+icon/action columns cannot shift field interpretation; ambiguous headers remain
+unsupported. Recognized rows without proven complete inventory remain incomplete,
+not unavailable and not eligible for unified Connect. A visible bare toolbar number
+is not enough to invent a DOM selector or bypass completeness reconciliation.

@@ -250,6 +250,20 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.credentialSaving.generalAutofillEnabled -ne $true) {
         throw 'Engine-managed password saving was not enabled in both isolated account profiles.'
     }
+    $requiredHeaderChecks = @(
+        'recognizedComputerNameHeader',
+        'reorderedHeaderMapping',
+        'optionalNotesBlankWhenAbsent',
+        'ambiguousComputerNameHeadersUnavailable',
+        'unsupportedContentUnavailable',
+        'reorderedConnectMappedUnique',
+        'changedReorderedIdentityRefused'
+    )
+    foreach ($check in $requiredHeaderChecks) {
+        if ($runtimeResult.inventory.$check -ne $true) {
+            throw "Computer Name header/mapped-row runtime proof is missing or failed: $check."
+        }
+    }
     if ($runtimeResult.inventory.capturedRows -ne 5 -or
         $runtimeResult.inventory.duplicateDisplayNamesRetained -ne 2 -or
         $runtimeResult.inventory.rowsWithConnectControl -ne 3 -or

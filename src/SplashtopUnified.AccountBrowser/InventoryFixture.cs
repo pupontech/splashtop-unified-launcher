@@ -3,7 +3,7 @@ namespace SplashtopUnified.AccountBrowser;
 /// <summary>
 /// Builds the local fixture page used to prove the inventory extractor at runtime.
 /// The markup is invented from the column labels observed in the official Splashtop
-/// support screenshot (Name / Device Name / Group / Notes plus a per-row Connect
+/// support screenshot (Computer Name / Device Name / Group and optional Notes plus a per-row Connect
 /// control); it is NOT captured Splashtop DOM and contains no real account data.
 /// </summary>
 internal static class InventoryFixture
@@ -11,13 +11,13 @@ internal static class InventoryFixture
     public const string VirtualHost = "my.splashtop.com";
 
     public static string ComputerListHtml() =>
-        "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
+        "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title><style>.sorted::after{content:' ▲';}</style></head><body>" +
         "<div class='toolbar'>" +
         "  <button>Add Computer</button><button>Business App</button><button aria-label='Refresh'>Refresh</button>" +
         "  <button aria-label='Filter'>Filter</button><input type='search' aria-label='Search' />" +
         "</div>" +
         "<table id='computers'>" +
-        "  <thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
+        "  <thead><tr><th class='sorted'>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
         "  <tbody>" +
         Row("Fixture Desktop", "fixture-desktop", "Default Group", string.Empty, true, "Online") +
         Row("Fixture Server", "fixture-server", "Servers", "lab", true, "Offline") +
@@ -28,6 +28,31 @@ internal static class InventoryFixture
         Row("Fixture Backup", "online-backup-01", "Default Group", string.Empty, false) +
         "  </tbody>" +
         "</table></body></html>";
+
+    /// <summary>
+    /// Invented semantic variant: an unlabeled leading icon column, reordered known
+    /// columns, no Notes column, and trailing unlabeled action columns. It is not captured
+    /// console DOM and deliberately tests that blank columns do not shift row identity.
+    /// </summary>
+    public static string ReorderedNoNotesListHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Reordered computers</title><style>.sorted::after{content:' ▲';}</style></head><body>" +
+        "<div style='width:420px;overflow-x:auto'><table id='computers'><thead><tr>" +
+        "<th></th><th>Group</th><th>Device Name</th><th class='sorted'>Computer Name</th><th></th><th></th>" +
+        "</tr></thead><tbody>" +
+        "<tr><td><table aria-hidden='true'><tbody><tr><td><span>▣</span></td></tr></tbody></table></td><td>Fixture Group</td><td>fixture-device</td>" +
+        "<td>Fixture Computer</td><td><button aria-label='Connect' onclick=\"window.__connectClicks=(window.__connectClicks||0)+1\">Connect</button></td>" +
+        "<td><button aria-label='More actions'>...</button></td></tr>" +
+        "</tbody></table></div></body></html>";
+
+    public static string AmbiguousComputerNameHeadersHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Ambiguous headers</title></head><body>" +
+        "<table><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Computer Name</th></tr></thead>" +
+        "<tbody><tr><td>Should not publish</td><td>synthetic-device</td><td>Synthetic</td><td>also ambiguous</td></tr></tbody></table>" +
+        "</body></html>";
+
+    public static string UnsupportedContentHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Unsupported synthetic content</title></head><body>" +
+        "<main><h1>Unsupported synthetic content</h1><p>This is not a computer list.</p></main></body></html>";
 
     public static string LoginHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Sign in</title></head><body>" +
@@ -51,7 +76,7 @@ internal static class InventoryFixture
         }
 
         return "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
-            "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
+            "<table id='computers'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table>" +
             "<nav id='pager' aria-label='pagination'><button id='prev' aria-label='Previous page'>Previous</button>" +
             "<span id='range'></span><button id='next' aria-label='Next page'>Next</button></nav>" +
@@ -68,7 +93,7 @@ internal static class InventoryFixture
 
     public static string PagedDuplicateRowsNoTotalHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Duplicate rows without a total</title></head><body>" +
-        "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table>" +
+        "<table id='computers'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table>" +
         "<nav aria-label='pagination'><button id='prev' aria-label='Previous page'>Previous</button>" +
         "<span id='page' aria-current='page'></span><button id='next' aria-label='Next page'>Next</button></nav>" +
         "<script>var pages=[[" +
@@ -83,7 +108,7 @@ internal static class InventoryFixture
     public static string VirtualisedIdenticalRowsNoTotalHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Indistinguishable virtual rows</title></head><body>" +
         "<div id='scroller' style='height:80px;overflow-y:auto'><div style='position:relative;height:240px'>" +
-        "<table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table></div></div>" +
+        "<table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table></div></div>" +
         "<script>var all=[{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'},{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}," +
         "{n:'Virtual 3',d:'virtual-3',g:'Synthetic',t:''},{n:'Virtual 4',d:'virtual-4',g:'Synthetic',t:''},{n:'Virtual 5',d:'virtual-5',g:'Synthetic',t:''}];" +
         "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');function render(){var start=Math.floor(scroller.scrollTop/40);" +
@@ -109,7 +134,7 @@ internal static class InventoryFixture
             $"<div id='scroller' style='height:{viewport}px;overflow-y:auto'>" +
             $"<div id='canvas' style='position:relative;height:{total * rowHeight}px'>" +
             "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
-            "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
+            "<thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
             $"<p role='status'>{total} computers</p>" +
             "<script>" +
@@ -142,7 +167,7 @@ internal static class InventoryFixture
             $"<div id='scroller' style='height:{viewport}px;overflow-y:auto'>" +
             $"<div id='canvas' style='position:relative;height:{total * rowHeight}px'>" +
             "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
-            "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
+            "<thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
             $"<p role='status'>{total} computers</p>" +
             "<script>" +
@@ -163,7 +188,7 @@ internal static class InventoryFixture
     /// </summary>
     public static string ChooserListHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
-        "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead><tbody>" +
+        "<table id='computers'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead><tbody>" +
         Row("Fixture Desktop", "fixture-desktop", "Default Group", string.Empty, true) +
         "</tbody></table>" +
         "<div role='dialog' aria-label='Connect to this Computer'>" +
@@ -196,7 +221,7 @@ internal static class InventoryFixture
             "<div id='scroller' style='height:" + viewport + "px;overflow-y:auto'>" +
             "<div style='position:relative;height:" + (total * rowHeight) + "px'>" +
             "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
-            "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead>" +
+            "<thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
             "<p role='status'>" + total + " computers</p>" +
             "<script>var initialRender=true;var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
@@ -210,7 +235,7 @@ internal static class InventoryFixture
             $"<tr style='height:50px'><td>Reconciled {i}</td><td>fixture-{i}</td><td>Synthetic</td><td></td><td><button aria-label='Connect'>Connect</button></td></tr>"));
         return "<!doctype html><html><head><meta charset='utf-8'><title>Reconciled list</title></head><body>" +
             "<div id='scroller' style='height:80px;overflow-y:auto' onscroll=\"window.__reconcileScrolls=(window.__reconcileScrolls||0)+1\">" +
-            "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody>" + rows +
+            "<table id='computers'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody>" + rows +
             "</tbody></table></div><p role='status'>5 computers</p></body></html>";
     }
 

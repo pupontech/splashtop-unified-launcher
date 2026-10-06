@@ -408,7 +408,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             read.PagesVisited, read.WalkMillis, read.Mode);
         _inventoryObserver?.Invoke(snapshot);
         _status(read.Outcome == InventoryOutcome.Unavailable
-            ? $"{AccountName}: no computer list on this page yet ({read.PageKind.ToString().ToLowerInvariant()})."
+            ? $"{AccountName}: {read.Diagnostic ?? "Computer list unavailable; inspect the current page layout."}"
             : $"{AccountName}: read {read.Rows.Count} row(s) — {read.Outcome.ToString().ToLowerInvariant()}" +
               (read.Mode is { Length: > 0 } && read.Mode != "single" ? $", {read.Mode}" : string.Empty) +
               (read.PagesVisited > 1 ? $", {read.PagesVisited} pages" : string.Empty) +

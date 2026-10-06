@@ -71,15 +71,20 @@ internal static class ConsoleInventoryActions
             "    var label = function (node) { return clean(node.getAttribute('aria-label') || node.innerText || node.textContent || ''); };" +
             "    var tables = Array.prototype.slice.call(document.querySelectorAll('table')).filter(function (table) {" +
             "      if (!visible(table)) { return false; }" +
-            "      var headers = Array.prototype.map.call(table.querySelectorAll('thead th'), function (th) { return clean(th.textContent).toLowerCase(); });" +
-            "      return ['name','device name','group','notes'].every(function (header) {" +
-            "        return headers.filter(function (candidate) { return candidate === header; }).length === 1;" +
-            "      });" +
+            "      var head = table.querySelector('thead'); if (!head || head.querySelectorAll('tr').length !== 1) { return false; }" +
+            "      var headers = Array.prototype.slice.call(head.querySelector('tr').children);" +
+            "      if (!headers.length || headers.some(function (h) { return (h.tagName !== 'TH' && h.tagName !== 'TD') || Number(h.colSpan || 1) !== 1 || Number(h.rowSpan || 1) !== 1; })) { return false; }" +
+            "      var map = { name: [], deviceName: [], group: [], notes: [] };" +
+            "      headers.forEach(function (h, i) { var text = clean(h.textContent).toLowerCase(); if (text === 'name' || text === 'computer name') { map.name.push(i); } else if (text === 'device name') { map.deviceName.push(i); } else if (text === 'group') { map.group.push(i); } else if (text === 'notes') { map.notes.push(i); } });" +
+            "      if (map.name.length !== 1 || map.deviceName.length !== 1 || map.group.length !== 1 || map.notes.length > 1) { return false; }" +
+            "      table.__inventoryHeaderMap = { count: headers.length, name: map.name[0], deviceName: map.deviceName[0], group: map.group[0], notes: map.notes.length ? map.notes[0] : null };" +
+            "      return true;" +
             "    });" +
             "    if (tables.length !== 1) { return tables.length ? 'ambiguous-table' : 'no-table'; }" +
-            "    var body = tables[0].querySelector('tbody') || tables[0];" +
+            "    var body = tables[0].querySelector('tbody'); if (!body) { return 'no-table'; }" +
+            "    var columnMap = tables[0].__inventoryHeaderMap;" +
             "    var rows = Array.prototype.filter.call(body.querySelectorAll('tr'), function (row) {" +
-            "      return visible(row) && row.querySelectorAll('td').length >= 4;" +
+            "      return visible(row) && row.querySelectorAll(':scope > td').length === columnMap.count;" +
             "    });" +
             $"    var rowIndex = {rowIndex};" +
             $"    var expected = {expected};" +
@@ -96,9 +101,9 @@ internal static class ConsoleInventoryActions
             "      return '';" +
             "    };" +
             "    var matchesIdentity = function (row) {" +
-            "      var cells = row.querySelectorAll('td');" +
-            "      return clean(cells[0].textContent) === expected.name && clean(cells[1].textContent) === expected.deviceName &&" +
-            "        clean(cells[2].textContent) === expected.group && clean(cells[3].textContent) === expected.notes &&" +
+            "      var cells = row.querySelectorAll(':scope > td');" +
+            "      return clean(cells[columnMap.name].textContent) === expected.name && clean(cells[columnMap.deviceName].textContent) === expected.deviceName &&" +
+            "        clean(cells[columnMap.group].textContent) === expected.group && (columnMap.notes === null ? '' : clean(cells[columnMap.notes].textContent)) === expected.notes &&" +
             "        observedStatus(row) === expected.status;" +
             "    };" +
             "    var row = rows[rowIndex];" +

@@ -65,6 +65,9 @@ internal static class BrowserSmokeTest
             await AssertStateAsync(panes[0], "A", false); await AssertStateAsync(panes[1], "B", false);
             var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages, hostConfirmationRequests);
             await File.WriteAllTextAsync(Path.Combine(fixture, "computers.html"), InventoryFixture.ComputerListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "reordered-no-notes.html"), InventoryFixture.ReorderedNoNotesListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "ambiguous-headers.html"), InventoryFixture.AmbiguousComputerNameHeadersHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "unsupported.html"), InventoryFixture.UnsupportedContentHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged-duplicates.html"), InventoryFixture.PagedDuplicateRowsNoTotalHtml());
@@ -291,6 +294,8 @@ internal static class BrowserSmokeTest
 
         var read = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList);
         Require(read.Authentication == ConsoleAuthentication.Authenticated, "The fixture list is recognised as an authenticated console");
+        Require(read.Rows[0].Name == "Fixture Desktop" && read.Rows[0].DeviceName == "fixture-desktop" && read.Rows[0].Group == "Default Group",
+            "Computer Name is mapped to name, with Device Name and Group preserved");
         Require(read.Outcome == InventoryOutcome.Incomplete, "A list without a console-reported total is reported as incomplete, never complete");
         Require(read.Rows.Count == 5, "All five fixture rows are extracted");
         Require(read.Rows.Count(row => row.Name == "Fixture VM") == 2, "Duplicate display names are retained, never merged");
@@ -464,6 +469,38 @@ internal static class BrowserSmokeTest
             "A non-owning inventory invocation cannot clear the page walk lock");
         await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive=null");
 
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/reordered-no-notes.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Any(row => row.Name == "Fixture Computer")),
+            "the reordered header fixture to be mapped");
+        var reordered = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Any(row => row.Name == "Fixture Computer"));
+        var reorderedRow = reordered.Rows.Single();
+        Require(reordered.Outcome == InventoryOutcome.Incomplete, "A no-total one-row fixture remains incomplete");
+        Require(reorderedRow.Name == "Fixture Computer" && reorderedRow.DeviceName == "fixture-device" && reorderedRow.Group == "Fixture Group",
+            "An unlabeled leading icon column and reordered headers do not shift Computer Name, Device Name, or Group");
+        Require(string.IsNullOrEmpty(reorderedRow.Notes), "An omitted optional Notes column produces a blank Notes field");
+        Require(reorderedRow.HasConnectControl, "The row's unique Connect action is mapped despite the leading icon column");
+        Require(await pane.ActivateConnectAsync(0) == "clicked", "Mapped row Connect activates the unique Connect control");
+        var reorderedClickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
+        Require(reorderedClickCount.Trim() == "1", "The reordered fixture observed exactly one mapped Connect activation");
+        await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr td:nth-child(4)').textContent='Changed fixture identity'");
+        Require(await pane.ActivateConnectAsync(0) == "identity-mismatch", "Connect refuses a changed row identity in the reordered fixture");
+
+        var beforeAmbiguous = snapshots.Count;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/ambiguous-headers.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Skip(beforeAmbiguous).Any(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable),
+            "ambiguous Computer Name headers to fail closed");
+        var ambiguous = snapshots.Skip(beforeAmbiguous).Last(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable);
+        Require(ambiguous.Rows.Count == 0 && ambiguous.Outcome == InventoryOutcome.Unavailable,
+            "Duplicate Computer Name headers are unavailable and publish no rows");
+
+        var beforeUnsupported = snapshots.Count;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/unsupported.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Skip(beforeUnsupported).Any(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable),
+            "unsupported content to fail closed");
+        var unsupported = snapshots.Skip(beforeUnsupported).Last(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable);
+        Require(unsupported.Rows.Count == 0 && unsupported.Outcome == InventoryOutcome.Unavailable,
+            "Unsupported content never becomes an empty or complete computer inventory");
+
         // The console's connect chooser is presented and applied from the unified list.
         var absent = await pane.ProbeChooserAsync();
         Require(absent is null || !absent.Present, "A list page without a chooser is never reported as showing one");
@@ -492,6 +529,13 @@ internal static class BrowserSmokeTest
 
         return new
         {
+            recognizedComputerNameHeader = read.Rows.Count == 5 && read.Rows[0].Name == "Fixture Desktop",
+            reorderedHeaderMapping = reorderedRow.Name == "Fixture Computer" && reorderedRow.DeviceName == "fixture-device" && reorderedRow.Group == "Fixture Group",
+            optionalNotesBlankWhenAbsent = string.IsNullOrEmpty(reorderedRow.Notes),
+            ambiguousComputerNameHeadersUnavailable = ambiguous.Outcome == InventoryOutcome.Unavailable && ambiguous.Rows.Count == 0,
+            unsupportedContentUnavailable = unsupported.Outcome == InventoryOutcome.Unavailable && unsupported.Rows.Count == 0,
+            reorderedConnectMappedUnique = reorderedRow.HasConnectControl && reorderedClickCount.Trim() == "1",
+            changedReorderedIdentityRefused = true,
             capturedRows = read.Rows.Count,
             duplicateDisplayNamesRetained = read.Rows.Count(row => row.Name == "Fixture VM"),
             rowsWithConnectControl = read.Rows.Count(row => row.HasConnectControl),
