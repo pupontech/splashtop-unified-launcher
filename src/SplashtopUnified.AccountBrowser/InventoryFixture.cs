@@ -76,7 +76,7 @@ internal static class InventoryFixture
         "{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}],[" +
         "{n:'Repeated device',d:'shared-device',g:'Synthetic',t:'notes B'}," +
         "{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}]];var page=0;" +
-        "function render(){document.getElementById('rows').innerHTML=pages[page].map(function(r){return '<tr><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');" +
+        "function render(){document.getElementById('rows').innerHTML=pages[page].map(function(r){return '<tr><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');" +
         "document.getElementById('page').textContent='Page '+(page+1);document.getElementById('prev').disabled=page===0;document.getElementById('next').disabled=page===pages.length-1;}" +
         "document.getElementById('next').onclick=function(){page++;render();};document.getElementById('prev').onclick=function(){page--;render();};render();</script></body></html>";
 
@@ -87,7 +87,7 @@ internal static class InventoryFixture
         "<script>var all=[{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'},{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}," +
         "{n:'Virtual 3',d:'virtual-3',g:'Synthetic',t:''},{n:'Virtual 4',d:'virtual-4',g:'Synthetic',t:''},{n:'Virtual 5',d:'virtual-5',g:'Synthetic',t:''}];" +
         "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');function render(){var start=Math.floor(scroller.scrollTop/40);" +
-        "var slice=all.slice(start,start+3);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\\\"height:40px\\\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');" +
+        "var slice=all.slice(start,start+3);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:40px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');" +
         "table.style.transform='translateY('+(start*40)+'px');}scroller.addEventListener('scroll',render);render();</script></body></html>";
 
     /// <summary>
@@ -185,7 +185,7 @@ internal static class InventoryFixture
             .Select(i => $"{{n:'Fixture Node {i:D2}',d:'fixture-node-{i}',g:'Synthetic',t:''}}")
             .ToArray();
         var render = "function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;" +
-                     "var slice=all.slice(start,start+count);var apply=function(){document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\\\"height:'+RH+'px\\\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px)';};" +
+                     "var slice=all.slice(start,start+count);var apply=function(){document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:'+RH+'px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px)';};" +
                      (repaintDelayMillis == 0 ? "apply();}" : $"setTimeout(apply,{repaintDelayMillis});}}");
 
         return "<!doctype html><html><head><meta charset='utf-8'><title>" + title + "</title>" +
