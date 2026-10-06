@@ -257,7 +257,8 @@ function Invoke-AccountBrowserSmokeTest {
         'ambiguousComputerNameHeadersUnavailable',
         'unsupportedContentUnavailable',
         'reorderedConnectMappedUnique',
-        'changedReorderedIdentityRefused'
+        'changedReorderedIdentityRefused',
+        'nestedRowsExcludedFromConnect'
     )
     foreach ($check in $requiredHeaderChecks) {
         if ($runtimeResult.inventory.$check -ne $true) {

@@ -44,6 +44,18 @@ internal static class InventoryFixture
         "<td><button aria-label='More actions'>...</button></td></tr>" +
         "</tbody></table></div></body></html>";
 
+    // Invented nested markup: a decorative child row deliberately has the same cell
+    // count as real inventory rows. It must not shift the second target's action index.
+    public static string NestedDecorativeRowsHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Nested synthetic decoration</title></head><body>" +
+        "<table id='computers'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody>" +
+        "<tr><td>First fixture</td><td>first-device</td><td>Synthetic</td><td></td><td><table><tbody><tr>" +
+        "<td>decorative one</td><td>decorative two</td><td>decorative three</td><td>decorative four</td><td>decorative five</td>" +
+        "</tr></tbody></table></td></tr>" +
+        "<tr><td>Nested target</td><td>nested-target</td><td>Synthetic</td><td></td><td>" +
+        "<button aria-label='Connect' onclick=\"window.__connectClicks=(window.__connectClicks||0)+1\">Connect</button></td></tr>" +
+        "</tbody></table></body></html>";
+
     public static string AmbiguousComputerNameHeadersHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Ambiguous headers</title></head><body>" +
         "<table><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Computer Name</th></tr></thead>" +

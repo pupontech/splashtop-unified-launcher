@@ -67,6 +67,7 @@ internal static class BrowserSmokeTest
             await File.WriteAllTextAsync(Path.Combine(fixture, "computers.html"), InventoryFixture.ComputerListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "reordered-no-notes.html"), InventoryFixture.ReorderedNoNotesListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "ambiguous-headers.html"), InventoryFixture.AmbiguousComputerNameHeadersHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "nested-rows.html"), InventoryFixture.NestedDecorativeRowsHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "unsupported.html"), InventoryFixture.UnsupportedContentHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
@@ -485,6 +486,18 @@ internal static class BrowserSmokeTest
         await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr td:nth-child(4)').textContent='Changed fixture identity'");
         Require(await pane.ActivateConnectAsync(0) == "identity-mismatch", "Connect refuses a changed row identity in the reordered fixture");
 
+        var beforeNested = snapshots.Count;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/nested-rows.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Skip(beforeNested).Any(item => item.Rows.Any(row => row.Name == "Nested target")),
+            "nested decorative rows to be excluded from inventory and action indexes");
+        var nested = snapshots.Skip(beforeNested).Last(item => item.Rows.Any(row => row.Name == "Nested target"));
+        Require(nested.Rows.Count == 2 && nested.Rows[1].Name == "Nested target",
+            "Only direct inventory rows are read; nested decorative rows are not computer records");
+        Require(await pane.ActivateConnectAsync(1) == "clicked",
+            "A nested decorative row with the same cell count cannot shift the second computer's Connect index");
+        var nestedClickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
+        Require(nestedClickCount.Trim() == "1", "The nested-row fixture clicks exactly the intended second computer once");
+
         var beforeAmbiguous = snapshots.Count;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/ambiguous-headers.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Skip(beforeAmbiguous).Any(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable),
@@ -536,6 +549,7 @@ internal static class BrowserSmokeTest
             unsupportedContentUnavailable = unsupported.Outcome == InventoryOutcome.Unavailable && unsupported.Rows.Count == 0,
             reorderedConnectMappedUnique = reorderedRow.HasConnectControl && reorderedClickCount.Trim() == "1",
             changedReorderedIdentityRefused = true,
+            nestedRowsExcludedFromConnect = nested.Rows.Count == 2 && nestedClickCount.Trim() == "1",
             capturedRows = read.Rows.Count,
             duplicateDisplayNamesRetained = read.Rows.Count(row => row.Name == "Fixture VM"),
             rowsWithConnectControl = read.Rows.Count(row => row.HasConnectControl),

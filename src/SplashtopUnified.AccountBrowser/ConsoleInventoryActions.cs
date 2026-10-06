@@ -83,7 +83,7 @@ internal static class ConsoleInventoryActions
             "    if (tables.length !== 1) { return tables.length ? 'ambiguous-table' : 'no-table'; }" +
             "    var body = tables[0].querySelector('tbody'); if (!body) { return 'no-table'; }" +
             "    var columnMap = tables[0].__inventoryHeaderMap;" +
-            "    var rows = Array.prototype.filter.call(body.querySelectorAll('tr'), function (row) {" +
+            "    var rows = Array.prototype.filter.call(body.querySelectorAll(':scope > tr'), function (row) {" +
             "      return visible(row) && row.querySelectorAll(':scope > td').length === columnMap.count;" +
             "    });" +
             $"    var rowIndex = {rowIndex};" +
