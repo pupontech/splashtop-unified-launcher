@@ -72,6 +72,34 @@ public sealed class ConnectionChooserTests
     }
 
     [Fact]
+    public void ProbeRequiresTheExactDocumentedHeading()
+    {
+        Assert.False(ConnectionChooser.TryParseProbe(
+            Probe(present: true, native: true, web: false, heading: "Other Connect Dialog"), out _));
+    }
+
+    [Fact]
+    public void ProbeAndApplyScriptsRequireStrictOriginAndUniqueScopedChooserControls()
+    {
+        var probe = ConnectionChooser.ProbeScript;
+        var apply = ConnectionChooser.SelectScript(ConnectionChooser.NativeKey);
+
+        foreach (var script in new[] { probe, apply })
+        {
+            Assert.Contains("currentUrl.protocol !== 'https:'", script, StringComparison.Ordinal);
+            Assert.Contains("currentUrl.port !== ''", script, StringComparison.Ordinal);
+            Assert.Contains("new URL(window.location.href)", script, StringComparison.Ordinal);
+            Assert.Contains("currentUrl.username", script, StringComparison.Ordinal);
+            Assert.Contains("currentUrl.password", script, StringComparison.Ordinal);
+            Assert.Contains("window.top !== window.self", script, StringComparison.Ordinal);
+            Assert.Contains("role=dialog", script, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("name(node) === target", apply, StringComparison.Ordinal);
+        Assert.DoesNotContain("text.indexOf(target)", apply, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OnlyDocumentedOptionsCanBeApplied()
     {
         Assert.Contains(ConnectionChooser.NativeLabel, ConnectionChooser.SelectScript(ConnectionChooser.NativeKey), StringComparison.Ordinal);

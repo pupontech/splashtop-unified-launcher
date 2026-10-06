@@ -21,9 +21,15 @@ public sealed class TrustedNativeArmTests
     }
 
     [Fact]
-    public void AllowanceAcceptsTheChooserFollowUpThatWebViewReportsAsNotUserInitiated()
+    public void CallerSuppliedArmFlagNeverAuthorizesANonUserInitiatedHandoff()
     {
-        Assert.True(BusinessAppHandoff.IsAllowedRequest(TrustedUri, TrustedOrigin, isUserInitiated: false, trustedArmActive: true));
+        Assert.False(BusinessAppHandoff.IsAllowedRequest(TrustedUri, TrustedOrigin, isUserInitiated: false, trustedArmActive: true));
+        var dispatcher = new RecordingDispatcher();
+        var handoff = new BusinessAppHandoff(dispatcher);
+
+        Assert.Equal(BusinessAppHandoffResult.Rejected,
+            handoff.TryDispatch(TrustedUri, TrustedOrigin, isUserInitiated: false, trustedArmActive: true));
+        Assert.Empty(dispatcher.ReceivedUris);
     }
 
     [Fact]
@@ -61,16 +67,17 @@ public sealed class TrustedNativeArmTests
     }
 
     [Fact]
-    public void DispatcherReceivesTheChooserUriOnlyOnceInsideTheAllowance()
+    public void DispatcherReceivesTheChooserUriOnlyAfterNativeConfirmation()
     {
-        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var arm = new NativeHandoffArm(() => now, TimeSpan.FromSeconds(12));
         var dispatcher = new RecordingDispatcher();
         var handoff = new BusinessAppHandoff(dispatcher);
 
-        arm.Open();
-        Assert.Equal(BusinessAppHandoffResult.Dispatched, handoff.TryDispatch(TrustedUri, TrustedOrigin, isUserInitiated: false, trustedArmActive: arm.Consume()));
-        Assert.Equal(BusinessAppHandoffResult.Rejected, handoff.TryDispatch(TrustedUri, TrustedOrigin, isUserInitiated: false, trustedArmActive: arm.Consume()));
+        Assert.Equal(BusinessAppHandoffResult.Rejected,
+            handoff.TryDispatchWithHostConfirmation(TrustedUri, TrustedOrigin, isUserInitiated: false, confirmHost: () => false));
+        Assert.Empty(dispatcher.ReceivedUris);
+
+        Assert.Equal(BusinessAppHandoffResult.Dispatched,
+            handoff.TryDispatchWithHostConfirmation(TrustedUri, TrustedOrigin, isUserInitiated: false, confirmHost: () => true));
         Assert.Single(dispatcher.ReceivedUris);
         Assert.Equal(TrustedUri, dispatcher.ReceivedUris[0]);
     }

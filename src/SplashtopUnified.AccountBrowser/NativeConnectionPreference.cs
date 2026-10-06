@@ -12,8 +12,8 @@ public static class NativeConnectionPreference
     public static readonly TimeSpan ArmLifetime = TimeSpan.FromSeconds(12);
 
     /// <summary>
-    /// Install at document start. Messages are advisory; the native host must
-    /// validate the WebView message source and report failures to the user.
+    /// Install at document start. Its page-posted events are advisory and must never
+    /// authorize a native handoff; the native host confirms unverified gestures itself.
     /// </summary>
     public const string InstallScript = """
 (() => {
@@ -37,12 +37,14 @@ public static class NativeConnectionPreference
   let runId = 0;
 
   function isOfficialGlobalTopDocument() {
+    let currentUrl;
+    try { currentUrl = new URL(window.location.href); } catch (_) { return false; }
     return window.top === window.self &&
-      location.protocol === "https:" &&
-      location.hostname.toLowerCase() === "my.splashtop.com" &&
-      location.port === "" &&
-      location.username === "" &&
-      location.password === "";
+      currentUrl.protocol === "https:" &&
+      currentUrl.hostname.toLowerCase() === "my.splashtop.com" &&
+      currentUrl.port === "" &&
+      currentUrl.username === "" &&
+      currentUrl.password === "";
   }
 
   function post(type, reason) {
@@ -86,7 +88,15 @@ public static class NativeConnectionPreference
     const hasButtonRole = role === "button";
     if (!isButton && !isLink && !hasButtonRole) return false;
     if (element.hasAttribute("disabled") || element.matches(":disabled") || element.getAttribute("aria-disabled") === "true") return false;
-    if (isLink && !element.hasAttribute("href") && !hasButtonRole) return false;
+    if (isLink) {
+      if (!element.hasAttribute("href") && !hasButtonRole) return false;
+      try {
+        const target = new URL(element.href, location.href);
+        if (target.protocol !== "https:" || target.origin !== location.origin) return false;
+      } catch (_) {
+        return false;
+      }
+    }
     return true;
   }
 
@@ -123,20 +133,36 @@ public static class NativeConnectionPreference
   }
 
   function snapshot() {
-    const semantic = document.querySelectorAll("h1,h2,h3,h4,h5,h6,[role],button,a");
-    if (semantic.length > MAX_SEMANTIC_NODES) return { tooManyNodes: true };
-    const headings = [];
-    const actions = [];
-    for (const element of semantic) {
-      if (element.matches("h1,h2,h3,h4,h5,h6") || normalize(element.getAttribute("role")).toLowerCase() === "heading") {
-        if (isVisible(element) && normalize(element.innerText || element.textContent) === HEADING_LABEL) headings.push(element);
+    const dialogs = document.querySelectorAll('[role=dialog],[aria-modal=true]');
+    if (dialogs.length > 16) return { tooManyNodes: true };
+    let semanticCount = 0;
+    const matchingDialogs = [];
+    for (const dialog of dialogs) {
+      if (!isVisible(dialog)) continue;
+      const semantic = dialog.querySelectorAll("h1,h2,h3,h4,h5,h6,[role],button,a");
+      semanticCount += semantic.length;
+      if (semanticCount > MAX_SEMANTIC_NODES) return { tooManyNodes: true };
+      const headings = [];
+      const actions = [];
+      for (const element of semantic) {
+        if (element.matches("h1,h2,h3,h4,h5,h6") || normalize(element.getAttribute("role")).toLowerCase() === "heading") {
+          if (isVisible(element) && normalize(element.innerText || element.textContent) === HEADING_LABEL) headings.push(element);
+        }
+        if (element.matches("button,a") || normalize(element.getAttribute("role")).toLowerCase() === "button") actions.push(element);
       }
-      if (element.matches("button,a") || normalize(element.getAttribute("role")).toLowerCase() === "button") actions.push(element);
+      if (headings.length > 1) return { ambiguous: true };
+      if (headings.length === 1) matchingDialogs.push({ dialog, actions });
     }
+    if (matchingDialogs.length > 1) return { ambiguous: true };
+    if (matchingDialogs.length === 0) return { headingCount: 0, nativeCount: 0, browserCount: 0 };
+    const actions = matchingDialogs[0].actions;
+    const nativeActions = actions.filter(action =>
+      isActionable(action) && isVisible(action) && hasExactActionLabel(action, NATIVE_LABEL));
     return {
-      headingCount: headings.length,
+      headingCount: 1,
       nativeCount: exactLabelActionCount(actions, NATIVE_LABEL),
-      browserCount: exactLabelActionCount(actions, BROWSER_LABEL)
+      browserCount: exactLabelActionCount(actions, BROWSER_LABEL),
+      nativeAction: nativeActions.length === 1 ? nativeActions[0] : null
     };
   }
 
@@ -152,14 +178,13 @@ public static class NativeConnectionPreference
       return fail("The chooser could not be inspected safely.");
     }
     if (evidence.tooManyNodes) return fail("The page exceeded the bounded chooser-inspection limit.");
+    if (evidence.ambiguous) return fail("The documented chooser was ambiguous; no option was selected.");
     if (evidence.headingCount > 1 || evidence.nativeCount > 1 || evidence.browserCount > 1) {
       return fail("The documented chooser was ambiguous; no option was selected.");
     }
     if (evidence.headingCount !== 1 || evidence.nativeCount !== 1 || evidence.browserCount !== 1) return;
 
-    const nativeAction = Array.from(document.querySelectorAll("button,a,[role]")).filter(element =>
-      normalize(element.getAttribute("role")).toLowerCase() === "button" || element.matches("button,a")
-    ).filter(element => isActionable(element) && isVisible(element) && hasExactActionLabel(element, NATIVE_LABEL));
+    const nativeAction = evidence.nativeAction ? [evidence.nativeAction] : [];
     if (nativeAction.length !== 1) return fail("The native chooser action was not unique and visible; no option was selected.");
 
     stop();

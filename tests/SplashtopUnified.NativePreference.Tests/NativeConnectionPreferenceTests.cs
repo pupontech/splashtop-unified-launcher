@@ -151,10 +151,13 @@ public sealed class NativeConnectionPreferenceTests
         Assert.Contains("const VERSION = 1", script, StringComparison.Ordinal);
         Assert.Contains("event.isTrusted !== true", script, StringComparison.Ordinal);
         Assert.Contains("my.splashtop.com", script, StringComparison.Ordinal);
+        Assert.Contains("new URL(window.location.href)", script, StringComparison.Ordinal);
+        Assert.Contains("currentUrl.username", script, StringComparison.Ordinal);
+        Assert.Contains("currentUrl.password", script, StringComparison.Ordinal);
         Assert.Contains("Connect to this Computer", script, StringComparison.Ordinal);
         Assert.Contains("From the Splashtop Business App", script, StringComparison.Ordinal);
         Assert.Contains("From the Web App in this browser", script, StringComparison.Ordinal);
-        Assert.Contains("button,a,[role]", script, StringComparison.Ordinal);
+        Assert.Contains("dialog.querySelectorAll", script, StringComparison.Ordinal);
         Assert.DoesNotContain("localStorage", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sessionStorage", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("document.cookie", script, StringComparison.OrdinalIgnoreCase);

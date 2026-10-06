@@ -18,7 +18,19 @@ internal sealed record UnifiedInventoryRow(
     string DeviceName,
     string Group,
     string Notes,
-    bool HasConnectControl);
+    bool HasConnectControl,
+    bool IsCurrent)
+{
+    public bool CanConnect => IsCurrent && HasConnectControl;
+
+    public ExtractedComputerRow ToComputerRow() => new(
+        Name,
+        string.IsNullOrEmpty(DeviceName) ? null : DeviceName,
+        string.IsNullOrEmpty(Group) ? null : Group,
+        string.IsNullOrEmpty(Notes) ? null : Notes,
+        HasConnectControl,
+        string.IsNullOrEmpty(Status) ? null : Status);
+}
 
 /// <summary>
 /// Native merged list over every configured account's most recent extraction.
@@ -26,21 +38,68 @@ internal sealed record UnifiedInventoryRow(
 /// </summary>
 internal sealed class UnifiedInventoryWindow : Window
 {
+    private readonly TextBlock _operationText = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 4) };
+    private readonly StackPanel _refreshPanel = new() { Margin = new Thickness(0, 6, 0, 6) };
+    private readonly Dictionary<string, (TextBlock Label, ProgressBar Bar)> _refreshRows = new(StringComparer.Ordinal);
+
+    public void BeginRefresh(IEnumerable<(string Id, string Name)> accounts)
+    {
+        _refreshRows.Clear();
+        _refreshPanel.Children.Clear();
+        _refreshPanel.Children.Add(new TextBlock { Text = "Refreshing…", FontWeight = FontWeights.Bold });
+        foreach (var account in accounts)
+        {
+            var label = new TextBlock { Text = $"{account.Name}: refreshing…" };
+            var bar = new ProgressBar { Height = 8, Maximum = 100, IsIndeterminate = true, Margin = new Thickness(0, 2, 0, 6) };
+            _refreshPanel.Children.Add(label);
+            _refreshPanel.Children.Add(bar);
+            _refreshRows[account.Id] = (label, bar);
+        }
+    }
+
+    public void UpdateRefresh(string id, string name, InventoryRefreshProgress progress)
+    {
+        if (!_refreshRows.TryGetValue(id, out var row)) return;
+        row.Bar.IsIndeterminate = progress.Percentage is null;
+        row.Bar.Value = progress.Percentage ?? 0;
+        row.Label.Text = progress.Percentage is { } percent
+            ? $"{name}: refreshing — {percent}% ({progress.RowsRead}/{progress.Total} rows)"
+            : $"{name}: refreshing — {progress.RowsRead} rows collected (total unknown)";
+    }
+
+    public void CompleteAccountRefresh(string id, string name, bool succeeded, bool reloadRequired = false)
+    {
+        if (!_refreshRows.TryGetValue(id, out var row)) return;
+        row.Bar.IsIndeterminate = false;
+        row.Bar.Value = succeeded ? 100 : row.Bar.Value;
+        row.Label.Text = succeeded ? $"{name}: refresh finished — 100%"
+            : reloadRequired ? $"{name}: outcome unknown — Reload required to recover safely"
+            : $"{name}: refresh failed or interrupted";
+    }
+
+    public void FinishRefresh()
+    {
+        if (_refreshPanel.Children.Count > 0 && _refreshPanel.Children[0] is TextBlock title)
+            title.Text = "Refresh finished";
+    }
+
     private readonly InventorySnapshotStore _store;
     private readonly Func<Task> _refreshAll;
-    private readonly Func<string, int, Task> _connectRow;
+    private readonly Func<UnifiedInventoryRow, Task> _connectRow;
     private readonly Func<Task<string>> _inspectConsoles;
     private readonly Action<string> _status;
     private readonly ListView _list = new();
+    private readonly Button _connectButton = new();
     private readonly TextBox _search = new();
     private readonly TextBlock _summary = new();
     private readonly TextBlock _statusText = new();
     private List<UnifiedInventoryRow> _rows = [];
+    private bool _isClosed;
 
     public UnifiedInventoryWindow(
         InventorySnapshotStore store,
         Func<Task> refreshAll,
-        Func<string, int, Task> connectRow,
+        Func<UnifiedInventoryRow, Task> connectRow,
         Action<string> status,
         Func<Task<string>>? inspectConsoles = null)
     {
@@ -65,17 +124,45 @@ internal sealed class UnifiedInventoryWindow : Window
         _search.TextChanged += (_, _) => ApplyFilter();
         toolbar.Children.Add(_search);
         var refresh = new Button { Content = "Refresh from consoles", Padding = new Thickness(10, 4, 10, 4) };
-        refresh.Click += async (_, _) => { refresh.IsEnabled = false; try { await _refreshAll(); } finally { refresh.IsEnabled = true; } };
+        refresh.Click += async (_, _) =>
+        {
+            refresh.IsEnabled = false;
+            try
+            {
+                await _refreshAll();
+            }
+            catch (Exception exception)
+            {
+                if (!_isClosed) _status($"Refresh failed ({exception.GetType().Name}); retry when ready.");
+            }
+            finally
+            {
+                if (!_isClosed) refresh.IsEnabled = true;
+            }
+        };
         toolbar.Children.Add(refresh);
-        var connect = new Button { Content = "Connect", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(8, 0, 0, 0) };
-        connect.Click += async (_, _) => await ConnectSelectedAsync();
-        toolbar.Children.Add(connect);
+        _connectButton.Content = "Connect";
+        _connectButton.Padding = new Thickness(10, 4, 10, 4);
+        _connectButton.Margin = new Thickness(8, 0, 0, 0);
+        _connectButton.IsEnabled = false;
+        _connectButton.Click += async (_, _) => await ConnectSelectedAsync();
+        toolbar.Children.Add(_connectButton);
         var inspect = new Button { Content = "Inspect consoles", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Read-only survey of each console page, used to diagnose a list that does not match the expected columns." };
-        inspect.Click += async (_, _) => { inspect.IsEnabled = false; try { await ShowInspectionAsync(); } finally { inspect.IsEnabled = true; } };
+        inspect.Click += async (_, _) =>
+        {
+            inspect.IsEnabled = false;
+            try { await ShowInspectionAsync(); }
+            catch (Exception exception) { if (!_isClosed) _status($"Inspection failed ({exception.GetType().Name})."); }
+            finally { if (!_isClosed) inspect.IsEnabled = true; }
+        };
         toolbar.Children.Add(inspect);
         DockPanel.SetDock(toolbar, Dock.Top);
         root.Children.Add(toolbar);
 
+        DockPanel.SetDock(_operationText, Dock.Top);
+        root.Children.Add(_operationText);
+        DockPanel.SetDock(_refreshPanel, Dock.Top);
+        root.Children.Add(_refreshPanel);
         _summary.Margin = new Thickness(0, 8, 0, 4);
         _summary.TextWrapping = TextWrapping.Wrap;
         DockPanel.SetDock(_summary, Dock.Top);
@@ -87,11 +174,24 @@ internal sealed class UnifiedInventoryWindow : Window
         DockPanel.SetDock(_statusText, Dock.Top);
         root.Children.Add(_statusText);
 
-        _list.MouseDoubleClick += async (_, _) => await ConnectSelectedAsync();
+        _list.MouseDoubleClick += async (_, args) =>
+        {
+            var item = ItemsControl.ContainerFromElement(_list, args.OriginalSource as DependencyObject) as ListViewItem;
+            if (item?.Content is UnifiedInventoryRow clicked && ReferenceEquals(_list.SelectedItem, clicked))
+                await ConnectSelectedAsync(clicked);
+        };
+        _list.PreviewKeyDown += async (_, args) =>
+        {
+            if (args.Key != System.Windows.Input.Key.Enter) return;
+            args.Handled = true;
+            await ConnectSelectedAsync();
+        };
+        _list.SelectionChanged += (_, _) => UpdateConnectEnabled();
         _list.View = BuildColumns();
         root.Children.Add(_list);
 
         Content = root;
+        Closed += (_, _) => _isClosed = true;
     }
 
     private static GridView BuildColumns()
@@ -113,9 +213,46 @@ internal sealed class UnifiedInventoryWindow : Window
         return column;
     }
 
+    /// <summary>Confirms host intent before asking the console to open its connection flow.</summary>
+    public Task<bool> AskConnectionIntentAsync(string accountName)
+    {
+        var dialog = new Window
+        {
+            Title = "Request connection",
+            Owner = this,
+            Width = 500,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        var body = new StackPanel { Margin = new Thickness(16) };
+        body.Children.Add(new TextBlock
+        {
+            Text = $"Account: {accountName}",
+            Foreground = Brushes.DimGray,
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+        body.Children.Add(new TextBlock
+        {
+            Text = "Request connection in Business app. Availability will be checked after the console opens its connection chooser.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 16)
+        });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var request = new Button { Content = "Request connection in Business app", Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
+        request.Click += (_, _) => dialog.DialogResult = true;
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(12, 6, 12, 6) };
+        cancel.Click += (_, _) => dialog.DialogResult = false;
+        buttons.Children.Add(request);
+        buttons.Children.Add(cancel);
+        body.Children.Add(buttons);
+        dialog.Content = body;
+        return Task.FromResult(dialog.ShowDialog() == true);
+    }
+
     /// <summary>
-    /// Presents the console's connect choice as a native prompt in this window. Returns the
-    /// chosen option key, or null when the user cancels.
+    /// Presents only the options in the console's observed chooser. Returns the chosen
+    /// option key, or null when the user cancels.
     /// </summary>
     public Task<string?> AskConnectChoiceAsync(string accountName, ChooserProbe probe)
     {
@@ -145,7 +282,7 @@ internal sealed class UnifiedInventoryWindow : Window
         });
         body.Children.Add(new TextBlock
         {
-            Text = "Choose how to open this session. The console behind this window is left untouched until you choose.",
+            Text = "These are the options exposed by the console's current connection chooser.",
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 16)
         });
@@ -205,7 +342,7 @@ internal sealed class UnifiedInventoryWindow : Window
     /// <summary>Shows a short status line, e.g. the result of a connect request.</summary>
     public void Status(string message)
     {
-        _statusText.Text = message;
+        _operationText.Text = message;
     }
 
     private static bool IsOnlineLike(string status) =>
@@ -219,43 +356,75 @@ internal sealed class UnifiedInventoryWindow : Window
         var notes = new List<string>();
         foreach (var snapshot in _store.All.OrderBy(snapshot => snapshot.AccountName, StringComparer.OrdinalIgnoreCase))
         {
+            var current = snapshot.CanConnectUsingCurrentRowPositions;
             for (var index = 0; index < snapshot.Rows.Count; index++)
             {
                 var row = snapshot.Rows[index];
+                var rowStatus = row.Status ?? string.Empty;
+                if (!current && rowStatus.Length > 0)
+                {
+                    var prefix = snapshot.IsCached
+                        ? "Cached"
+                        : snapshot.LatestAttemptOutcome is not null
+                            ? "Last read"
+                            : snapshot.Outcome == InventoryOutcome.Incomplete
+                                ? "Partial read"
+                                : "Historical";
+                    rowStatus = $"{prefix}: {rowStatus}";
+                }
+
                 merged.Add(new UnifiedInventoryRow(
                     snapshot.AccountId,
                     snapshot.AccountName,
                     index,
                     row.Name,
-                    row.Status ?? string.Empty,
+                    rowStatus,
                     row.DeviceName ?? string.Empty,
                     row.Group ?? string.Empty,
                     row.Notes ?? string.Empty,
-                    row.HasConnectControl));
+                    row.HasConnectControl,
+                    current));
             }
 
             var freshness = snapshot.CapturedAtUtc == DateTimeOffset.MinValue
                 ? "not read yet"
-                : snapshot.CapturedAtUtc.ToLocalTime().ToString("HH:mm:ss");
-            var statusReported = snapshot.Rows.Count(row => row.Status is { Length: > 0 });
-            var online = snapshot.Rows.Count(row => row.Status is { } status && IsOnlineLike(status));
-            notes.Add($"{snapshot.AccountName}: {snapshot.Outcome.ToString().ToLowerInvariant()}, {snapshot.Rows.Count} row(s)" +
-                      (statusReported > 0 ? $", {online} online of {statusReported} reporting status" : ", status not reported by this list") +
+                : snapshot.CapturedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            var statusReported = current ? snapshot.Rows.Count(row => row.Status is { Length: > 0 }) : 0;
+            var online = current ? snapshot.Rows.Count(row => row.Status is { } status && IsOnlineLike(status)) : 0;
+            var outcomeText = snapshot.Outcome.ToString().ToLowerInvariant();
+            var freshnessText = snapshot.IsCached
+                ? snapshot.LatestAttemptOutcome is { } cachedFailure
+                    ? $"cached (not live), latest attempt {cachedFailure.ToString().ToLowerInvariant()}, retained {outcomeText} snapshot"
+                    : $"cached (not live), retained {outcomeText} snapshot"
+                : snapshot.LatestAttemptOutcome is { } failedAttempt
+                    ? $"latest attempt {failedAttempt.ToString().ToLowerInvariant()}, retaining {outcomeText} snapshot"
+                    : snapshot.Outcome == InventoryOutcome.Incomplete
+                        ? "partial live read"
+                        : outcomeText;
+            notes.Add($"{snapshot.AccountName}: {freshnessText}, {snapshot.Rows.Count} row(s)" +
+                      (current
+                          ? statusReported > 0 ? $", {online} online of {statusReported} reporting status" : ", status not reported by this list"
+                          : ", row status is cached/last-read and not current") +
                       (snapshot.ReportedTotal is { } total ? $", console reports {total}" : string.Empty) +
                       $", read {freshness}" +
-                      (snapshot.Diagnostic is { Length: > 0 } diagnostic ? $" — {diagnostic}" : string.Empty));
+                      (snapshot.LatestAttemptAtUtc is { } attemptAt
+                          ? $", last attempt {attemptAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+                          : string.Empty) +
+                      ((snapshot.LatestAttemptDiagnostic ?? snapshot.Diagnostic) is { Length: > 0 } diagnostic ? $" — {diagnostic}" : string.Empty));
         }
 
         _rows = merged;
-        var allReported = merged.Count(row => row.Status.Length > 0);
-        var allOnline = merged.Count(row => IsOnlineLike(row.Status));
+        var currentRows = merged.Where(row => row.IsCurrent).ToList();
+        var allReported = currentRows.Count(row => row.Status.Length > 0);
+        var allOnline = currentRows.Count(row => IsOnlineLike(row.Status));
         _summary.Text = $"Merged {merged.Count} row(s) from {_store.All.Count} account(s)." +
                         (allReported > 0
-                            ? $" {allOnline} online of {allReported} row(s) reporting status."
-                            : " No row reported a status, so the Status column is blank rather than guessed.") +
+                            ? $" {allOnline} online of {allReported} row(s) reporting status in current complete reads."
+                            : " No current complete read reported row status; cached/partial values are marked as historical.") +
                         " Rows are never merged by name; the console list exposes no numeric identity.";
         _statusText.Text = string.Join(Environment.NewLine, notes);
         ApplyFilter();
+        UpdateConnectEnabled();
     }
 
     private void ApplyFilter()
@@ -271,14 +440,68 @@ internal sealed class UnifiedInventoryWindow : Window
     private static bool Contains(string? value, string search) =>
         value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
 
-    private async Task ConnectSelectedAsync()
+    private async Task ConnectSelectedAsync(UnifiedInventoryRow? clickedRow = null)
     {
-        if (_list.SelectedItem is not UnifiedInventoryRow selected)
+        if (_isClosed) return;
+        var selected = clickedRow ?? _list.SelectedItem as UnifiedInventoryRow;
+        if (selected is null)
         {
-            _status("Select a row to connect.");
+            ReportStatus("Select a row to connect.");
             return;
         }
 
-        await _connectRow(selected.AccountId, selected.RowIndexInAccount);
+        if (clickedRow is not null && !ReferenceEquals(_list.SelectedItem, clickedRow))
+        {
+            return;
+        }
+
+        if (!selected.CanConnect)
+        {
+            ReportStatus("Refresh this account's console before connecting; cached, partial, or stale row positions cannot be used.");
+            return;
+        }
+
+        if (!IsCurrentRowMatch(selected))
+        {
+            UpdateConnectEnabled();
+            ReportStatus("The current complete console read no longer matches this row. Refresh the list before connecting.");
+            return;
+        }
+
+        try
+        {
+            await _connectRow(selected);
+        }
+        catch (Exception exception)
+        {
+            if (!_isClosed) ReportStatus($"Connect failed ({exception.GetType().Name}); refresh before retrying.");
+        }
     }
+
+    private void ReportStatus(string message)
+    {
+        if (_isClosed) return;
+        try { _status(message); }
+        catch (Exception) { }
+    }
+
+    private void UpdateConnectEnabled() =>
+        _connectButton.IsEnabled = _list.SelectedItem is UnifiedInventoryRow selected &&
+            selected.CanConnect && IsCurrentRowMatch(selected);
+
+    private bool IsCurrentRowMatch(UnifiedInventoryRow row)
+    {
+        var current = _store.GetOrNotYetRead(row.AccountId, row.AccountBadge);
+        return current.CanConnectUsingCurrentRowPositions &&
+            row.RowIndexInAccount >= 0 && row.RowIndexInAccount < current.Rows.Count &&
+            Matches(current.Rows[row.RowIndexInAccount], row);
+    }
+
+    private static bool Matches(ExtractedComputerRow source, UnifiedInventoryRow row) =>
+        string.Equals(source.Name, row.Name, StringComparison.Ordinal) &&
+        string.Equals(source.Status ?? string.Empty, row.Status, StringComparison.Ordinal) &&
+        string.Equals(source.DeviceName ?? string.Empty, row.DeviceName, StringComparison.Ordinal) &&
+        string.Equals(source.Group ?? string.Empty, row.Group, StringComparison.Ordinal) &&
+        string.Equals(source.Notes ?? string.Empty, row.Notes, StringComparison.Ordinal) &&
+        source.HasConnectControl == row.HasConnectControl;
 }

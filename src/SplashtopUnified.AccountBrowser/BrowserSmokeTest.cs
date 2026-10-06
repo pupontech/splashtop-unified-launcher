@@ -15,6 +15,7 @@ internal static class BrowserSmokeTest
         var panes = new List<AccountWebViewPane>();
         var handoffDispatcher = new RecordingBusinessAppUriDispatcher();
         var handoffEvents = new ConcurrentQueue<HandoffEvent>();
+        var hostConfirmationRequests = new ConcurrentQueue<string>();
         var statusMessages = new ConcurrentQueue<string>();
         try
         {
@@ -38,7 +39,8 @@ internal static class BrowserSmokeTest
             for (var i = 0; i < 2; i++)
             {
                 environments[i] = await CoreWebView2Environment.CreateAsync(userDataFolder: folders[i]);
-                var pane = await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages);
+                var pane = await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages,
+                    nativeConfirmationRequests: i == 0 ? hostConfirmationRequests : null);
                 panes.Add(pane);
             }
             Require(!string.Equals(environments[0].UserDataFolder, environments[1].UserDataFolder, StringComparison.OrdinalIgnoreCase), "Distinct actual browser folders");
@@ -48,7 +50,8 @@ internal static class BrowserSmokeTest
             // Recreate controls while retaining the actual environments.
             foreach (var pane in panes) { grid.Children.Remove(pane); pane.Dispose(); }
             panes.Clear();
-            for (var i = 0; i < 2; i++) panes.Add(await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages));
+            for (var i = 0; i < 2; i++) panes.Add(await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages,
+                nativeConfirmationRequests: i == 0 ? hostConfirmationRequests : null));
             await AssertStateAsync(panes[0], "A", false); await AssertStateAsync(panes[1], "B", false);
             // Create new environment objects bound to the same persistent folders.
             foreach (var pane in panes) { grid.Children.Remove(pane); pane.Dispose(); }
@@ -56,16 +59,22 @@ internal static class BrowserSmokeTest
             for (var i = 0; i < 2; i++)
             {
                 environments[i] = await CoreWebView2Environment.CreateAsync(userDataFolder: folders[i]);
-                panes.Add(await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages));
+                panes.Add(await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages,
+                    nativeConfirmationRequests: i == 0 ? hostConfirmationRequests : null));
             }
             await AssertStateAsync(panes[0], "A", false); await AssertStateAsync(panes[1], "B", false);
-            var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages);
+            var nativeHandoff = await RunNativeHandoffSmokeAsync(panes[0], fixture, handoffDispatcher, handoffEvents, statusMessages, hostConfirmationRequests);
             await File.WriteAllTextAsync(Path.Combine(fixture, "computers.html"), InventoryFixture.ComputerListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "paged-duplicates.html"), InventoryFixture.PagedDuplicateRowsNoTotalHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "virtual-identical.html"), InventoryFixture.VirtualisedIdenticalRowsNoTotalHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "virtualised.html"), InventoryFixture.VirtualisedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "chooser.html"), InventoryFixture.ChooserListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "large-virtualised.html"), InventoryFixture.LargeVirtualisedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "short-viewport.html"), InventoryFixture.ShortViewportVirtualisedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "slow-repaint.html"), InventoryFixture.SlowRepaintVirtualisedListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "reconciled-scrollable.html"), InventoryFixture.ReconciledScrollableListHtml());
             grid.Children.Remove(panes[1]);
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
@@ -107,16 +116,25 @@ internal static class BrowserSmokeTest
         IBusinessAppUriDispatcher? dispatcher,
         ConcurrentQueue<HandoffEvent>? handoffEvents,
         ConcurrentQueue<string> statusMessages,
-        Action<AccountInventorySnapshot>? inventoryObserver = null)
+        Action<AccountInventorySnapshot>? inventoryObserver = null,
+        ConcurrentQueue<string>? nativeConfirmationRequests = null)
     {
         Action<string, string, bool>? observer = handoffEvents is null
             ? null
             : (eventName, uri, isUserInitiated) => handoffEvents.Enqueue(new HandoffEvent(eventName, uri, isUserInitiated));
+        Func<bool>? confirmNativeHandoff = nativeConfirmationRequests is null
+            ? null
+            : () =>
+            {
+                nativeConfirmationRequests.Enqueue("native-handoff");
+                return false;
+            };
         var pane = new AccountWebViewPane(message =>
         {
             Console.Error.WriteLine("SMOKE_BROWSER_STATUS=" + message);
             statusMessages.Enqueue(message);
-        }, dispatcher, observer, accountId: column == 0 ? "smoke-a" : "smoke-b", accountName: column == 0 ? "Smoke A" : "Smoke B", inventoryObserver: inventoryObserver);
+        }, dispatcher, observer, accountId: column == 0 ? "smoke-a" : "smoke-b", accountName: column == 0 ? "Smoke A" : "Smoke B", inventoryObserver: inventoryObserver,
+            nativeHandoffConfirmation: confirmNativeHandoff);
         Grid.SetColumn(pane, column); grid.Children.Add(pane);
         try
         {
@@ -137,7 +155,7 @@ internal static class BrowserSmokeTest
  <a id="popup" target="_blank" href="st-business://com.splashtop.business?source=popup-click">Popup native link</a>
  <a id="unrelated" href="unrelated-smoke://invalid.test/blocked">Unrelated scheme link</a>
  <a id="untrusted" href="st-business://com.splashtop.business?source=untrusted-origin">Untrusted-origin link</a>
- <button id="delayed" type="button" onclick="setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Connect: script-triggered native chooser follow-up</button>
+ <button id="delayed" type="button" onclick="window.chrome.webview.postMessage({source:'splashtop-native-connection-preference',version:1,type:'armed'});setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Connect: page-forged arm and delayed native chooser follow-up</button>
  </body></html>
  """;
 
@@ -146,7 +164,8 @@ internal static class BrowserSmokeTest
         string fixture,
         RecordingBusinessAppUriDispatcher dispatcher,
         ConcurrentQueue<HandoffEvent> handoffEvents,
-        ConcurrentQueue<string> statusMessages)
+        ConcurrentQueue<string> statusMessages,
+        ConcurrentQueue<string> hostConfirmationRequests)
     {
         const string trustedUrl = "https://my.splashtop.com/handoff.html";
         const string untrustedUrl = "https://untrusted.test/handoff.html";
@@ -197,6 +216,7 @@ internal static class BrowserSmokeTest
 
         await pane.NavigateAndWaitAsync(trustedUrl, TimeSpan.FromSeconds(20));
         var blockedBeforeDelayed = CountBlockedHandoffs(statusMessages);
+        var confirmationsBeforeDelayed = hostConfirmationRequests.Count;
         await ClickElementAsync(pane, "delayed");
         await WaitUntilAsync(
             () => handoffEvents.Any(item => item.Uri == delayedUri) || CountBlockedHandoffs(statusMessages) > blockedBeforeDelayed,
@@ -206,6 +226,12 @@ internal static class BrowserSmokeTest
         var delayedWasUserInitiated = delayedEvents.Any(item => item.IsUserInitiated);
         var delayedWasDispatched = dispatcher.ReceivedUris.Contains(delayedUri);
         Require(delayedWasDispatched == delayedWasUserInitiated, "Delayed redirect dispatch agrees with WebView2's observed IsUserInitiated value");
+        if (!delayedWasUserInitiated)
+        {
+            Require(hostConfirmationRequests.Count > confirmationsBeforeDelayed,
+                "A page-forged armed message cannot replace explicit native-host confirmation");
+            Require(!delayedWasDispatched, "A declined host confirmation blocks the non-user-initiated native URI");
+        }
         var expectedDispatches = delayedWasDispatched
             ? new[] { directUri, popupUri, delayedUri }
             : new[] { directUri, popupUri };
@@ -242,7 +268,26 @@ internal static class BrowserSmokeTest
         const string trustedOrigin = "https://my.splashtop.com";
         pane.Core.SetVirtualHostNameToFolderMapping("my.splashtop.com", fixture, CoreWebView2HostResourceAccessKind.DenyCors);
         await pane.NavigateAndWaitAsync(trustedOrigin + "/computers.html", TimeSpan.FromSeconds(20));
+        var forgedPayload = JsonSerializer.Serialize(new
+        {
+            source = ConsoleInventoryExtractor.MessageSource,
+            version = ConsoleInventoryExtractor.ScriptVersion,
+            requestId = "stale-smoke-request",
+            outcome = "complete",
+            pageKind = "computerList",
+            authentication = "authenticated",
+            rowCount = 1,
+            reportedTotal = 1,
+            rows = new[] { new { name = "Forged host state", deviceName = "forged", group = "Synthetic", notes = "", hasConnectControl = true } },
+            mode = "single",
+            walkedToEnd = false,
+            pagesVisited = 1,
+            walkMillis = 1
+        });
+        await pane.ExecuteScriptAsync($"window.chrome.webview.postMessage({JsonSerializer.Serialize(forgedPayload)})");
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList), "the console fixture to be extracted as a computer list");
+        Require(!snapshots.Any(item => item.Rows.Any(row => row.Name == "Forged host state")),
+            "A same-origin page message without the active host request identifier cannot publish rows");
 
         var read = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList);
         Require(read.Authentication == ConsoleAuthentication.Authenticated, "The fixture list is recognised as an authenticated console");
@@ -264,8 +309,30 @@ internal static class BrowserSmokeTest
         var clickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
         Require(clickCount.Trim() == "1", "The page observed exactly one Connect activation from the unified list");
 
+        await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr').querySelector('.row-connect').remove()");
+        var missingControl = await pane.ActivateConnectAsync(0);
+        Require(missingControl == "no-control", "A removed Connect action never falls back to the row's unrelated More control");
+        var countAfterMissingControl = await pane.ExecuteScriptAsync("window.__connectClicks||0");
+        Require(countAfterMissingControl.Trim() == "1", "A missing Connect action causes no additional activation");
+
+        await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr td').textContent='Changed fixture identity'");
+        var changedIdentity = await pane.ActivateConnectAsync(0);
+        Require(changedIdentity == "identity-mismatch", "The current live row identity is revalidated before Connect");
+
         var missingRow = await pane.ActivateConnectAsync(99);
         Require(missingRow == "no-row", "A stale row index is refused without clicking anything");
+
+        pane.Core.SetVirtualHostNameToFolderMapping("untrusted.test", fixture, CoreWebView2HostResourceAccessKind.DenyCors);
+        await pane.NavigateAndWaitAsync("https://untrusted.test/computers.html", TimeSpan.FromSeconds(20));
+        var actionScript = ConsoleInventoryActions.ActivateConnectScript(0, read.Rows[0]);
+        var rawUntrustedAction = await pane.ExecuteScriptAsync(actionScript);
+        Require(JsonSerializer.Deserialize<string>(rawUntrustedAction) == "blocked-origin",
+            "The Connect action script independently rejects an untrusted top-level origin");
+        Require(await pane.ActivateConnectAsync(0) == "blocked-origin",
+            "The host Connect method refuses to execute on an untrusted top-level origin");
+        Require(await pane.ProbeChooserAsync() is null && await pane.SelectChooserOptionAsync(ConnectionChooser.NativeKey) == "blocked-origin",
+            "The host chooser methods refuse an untrusted top-level origin");
+        Require(await pane.InspectConsoleAsync() == "{}", "Diagnostics refuse an untrusted top-level origin");
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/login.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.Login), "the sign-in fixture to be recognised");
@@ -296,6 +363,26 @@ internal static class BrowserSmokeTest
         Require(pagedWallMillis < 8000, "Walking a three-page console finishes well inside the refresh budget");
         Require(paged.WalkMillis < 6000, "The three-page walk itself stays inside its budget");
 
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/paged-duplicates.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "paged" && item.Rows.Count == 4),
+            "the no-total duplicate-page fixture to preserve all four row occurrences");
+        var pagedDuplicates = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "paged" && item.Rows.Count == 4);
+        Require(pagedDuplicates.Outcome == InventoryOutcome.Complete && pagedDuplicates.ReportedTotal is null,
+            "A verified no-total pager walk can complete without collapsing repeated visible rows");
+        Require(pagedDuplicates.PagesVisited == 2, "The duplicate fixture samples each of its two distinct page markers once");
+        Require(pagedDuplicates.Rows.Count(row => row.Name == "Exact duplicate") == 2,
+            "Exact-identical records on different pages retain their multiplicity");
+        Require(pagedDuplicates.Rows.Count(row => row.Name == "Repeated device" && row.Notes == "notes A") == 1 &&
+                pagedDuplicates.Rows.Count(row => row.Name == "Repeated device" && row.Notes == "notes B") == 1,
+            "Rows that differ only in Notes remain distinct across pages");
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/virtual-identical.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count >= 5),
+            "the virtual duplicate fixture to reach the end of its scroll walk");
+        var virtualIdentical = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count >= 5);
+        Require(virtualIdentical.Outcome == InventoryOutcome.Incomplete,
+            "A no-total virtual walk with indistinguishable duplicate rows cannot claim Complete");
+
         // A virtualised list that only renders the rows near the viewport must still be read in full.
         var virtualisedStartedAt = DateTimeOffset.Now;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/virtualised.html", TimeSpan.FromSeconds(20));
@@ -324,6 +411,37 @@ internal static class BrowserSmokeTest
         Require(large.Rows.Any(row => row.Name == "Fixture Node 240"), "The last row of a long account is captured");
         Require(largeWallMillis < 15000, "Reading a 240-row virtualised account stays inside the refresh budget");
         Require(large.WalkMillis < 12000, "The long-list walk itself stays inside its budget");
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/short-viewport.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 24 && item.ReportedTotal == 24),
+            "the 48-pixel viewport fixture to walk with overlap");
+        var shortViewport = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 24 && item.ReportedTotal == 24);
+        Require(shortViewport.Outcome == InventoryOutcome.Complete && shortViewport.Rows.Any(row => row.Name == "Fixture Node 24"),
+            "A short viewport uses overlapping steps and retains the final unique row");
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/slow-repaint.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24),
+            "a slow repaint to stop as an incomplete read", TimeSpan.FromSeconds(15));
+        var slowRepaint = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24);
+        Require(slowRepaint.Outcome == InventoryOutcome.Incomplete,
+            "A repaint that misses the bounded page deadline fails closed instead of claiming completeness");
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/reconciled-scrollable.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 5 && item.Rows.Count == 5),
+            "an all-rows-rendered result count to reconcile");
+        var reconciled = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 5 && item.Rows.Count == 5);
+        Require(reconciled.Outcome == InventoryOutcome.Complete, "An exact console total reconciles the fully rendered rows");
+        var scrollEvents = await pane.ExecuteScriptAsync("window.__reconcileScrolls||0");
+        Require(scrollEvents.Trim() == "0", "The walk exits before unnecessary scrolling after count reconciliation");
+
+        // Model a walk owned by another invocation. A rejected overlapping invocation
+        // must leave the original page-side lock value untouched.
+        await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive='smoke-owner'");
+        await pane.ExecuteScriptAsync(ConsoleInventoryExtractor.CreateExtractScript("smoke-competitor"));
+        var ownerValue = await pane.ExecuteScriptAsync("JSON.stringify(window.__splashtopInventoryWalkActive)");
+        Require(JsonSerializer.Deserialize<string>(ownerValue) == "smoke-owner",
+            "A non-owning inventory invocation cannot clear the page walk lock");
+        await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive=null");
 
         // The console's connect chooser is presented and applied from the unified list.
         var absent = await pane.ProbeChooserAsync();
@@ -373,11 +491,23 @@ internal static class BrowserSmokeTest
             pagedPagesVisited = paged.PagesVisited,
             pagedWalkMillis = paged.WalkMillis,
             pagedWallMillis,
+            pagedDuplicateRows = pagedDuplicates.Rows.Count,
+            pagedDuplicateOutcome = pagedDuplicates.Outcome.ToString(),
+            pagedDuplicateExactMultiplicity = pagedDuplicates.Rows.Count(row => row.Name == "Exact duplicate"),
+            pagedDuplicateNotesPreserved = pagedDuplicates.Rows.Count(row => row.Name == "Repeated device" && row.Notes == "notes A") == 1 &&
+                pagedDuplicates.Rows.Count(row => row.Name == "Repeated device" && row.Notes == "notes B") == 1,
+            virtualDuplicateOutcome = virtualIdentical.Outcome.ToString(),
+            virtualDuplicateRows = virtualIdentical.Rows.Count,
             virtualisedWallMillis,
             largeRowsCaptured = large.Rows.Count,
             largeOutcome = large.Outcome.ToString(),
             largeWalkMillis = large.WalkMillis,
             largeWallMillis,
+            shortViewportRows = shortViewport.Rows.Count,
+            slowRepaintOutcome = slowRepaint.Outcome.ToString(),
+            reconciledRows = reconciled.Rows.Count,
+            reconciledScrollEvents = scrollEvents.Trim(),
+            overlapLockRetained = JsonSerializer.Deserialize<string>(ownerValue) == "smoke-owner",
             chooserDetected = chooser.Present,
             chooserNativeApplied = nativeApplied == "clicked",
             chooserWebApplied = webApplied == "clicked",

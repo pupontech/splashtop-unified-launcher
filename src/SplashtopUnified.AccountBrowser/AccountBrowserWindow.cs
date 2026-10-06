@@ -11,14 +11,19 @@ internal sealed class AccountBrowserWindow : Window
     private readonly List<AccountProfile> _profiles;
     private readonly List<AccountWebViewPane> _panes = [];
     private readonly InventorySnapshotStore _inventory = new();
+    private readonly string _inventoryCachePath;
     private UnifiedInventoryWindow? _unifiedWindow;
+    private string? _inventoryCacheNotice;
     private bool _rebuildQueued;
+    private bool _connectInFlight;
     private bool _closed;
 
     public AccountBrowserWindow(AccountStore store, List<AccountProfile> profiles)
     {
         _store = store;
         _profiles = profiles;
+        _inventoryCachePath = InventoryCache.GetPath(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        LoadCachedInventory();
         Title = "Splashtop · two live accounts · isolated logins";
         Width = 1500; Height = 950; MinWidth = 900; MinHeight = 600;
         var root = new DockPanel();
@@ -63,8 +68,13 @@ internal sealed class AccountBrowserWindow : Window
             accountId: profile.Id, accountName: profile.Name,
             inventoryObserver: snapshot => MainThread(() => {
                 if (_closed || !_inventory.Apply(snapshot)) return;
+                PersistInventoryCache();
                 ScheduleRebuild();
-            }));
+            }), nativeHandoffConfirmation: () => MessageBox.Show(
+                _unifiedWindow is { IsVisible: true } unified ? unified : this,
+                "Open this session in the Splashtop Business app?",
+                "Confirm connection", MessageBoxButton.YesNo, MessageBoxImage.Question,
+                MessageBoxResult.No) == MessageBoxResult.Yes);
         _panes.Add(pane); panel.Children.Add(pane);
         reload.Click += (_, _) => { if (!_closed) pane.Navigate(_profiles[slot].ConsoleUrl); };
         edit.Click += (_, _) => {
@@ -92,18 +102,28 @@ internal sealed class AccountBrowserWindow : Window
     {
         if (_unifiedWindow is null || !_unifiedWindow.IsLoaded)
         {
-            _unifiedWindow = new UnifiedInventoryWindow(
+            UnifiedInventoryWindow? created = null;
+            created = new UnifiedInventoryWindow(
                 _inventory,
                 RefreshInventoryAsync,
                 ConnectByAccountRowAsync,
-                message => { if (!_closed) _unifiedWindow!.Status(message); },
+                message =>
+                {
+                    if (!_closed && ReferenceEquals(created, _unifiedWindow) && created is { IsLoaded: true })
+                        created.Status(message);
+                },
                 InspectConsolesAsync);
-            _unifiedWindow.Closed += (_, _) => _unifiedWindow = null;
-            _unifiedWindow.Show();
+            _unifiedWindow = created;
+            created.Closed += (_, _) => { if (ReferenceEquals(created, _unifiedWindow)) _unifiedWindow = null; };
+            created.Show();
         }
 
         _unifiedWindow.Activate();
         _unifiedWindow.Rebuild();
+        if (_inventoryCacheNotice is not null)
+        {
+            _unifiedWindow.Status(_inventoryCacheNotice);
+        }
     }
 
     /// <summary>
@@ -114,70 +134,133 @@ internal sealed class AccountBrowserWindow : Window
     private async Task RefreshInventoryAsync()
     {
         var panes = _panes.ToList();
-        _unifiedWindow?.Status($"Reading {panes.Count} console(s)…");
+        var targetWindow = _unifiedWindow;
+        targetWindow?.BeginRefresh(panes.Select(p => (p.AccountId, p.AccountName)));
+        targetWindow?.Status($"Reading {panes.Count} console(s)…");
         var started = DateTimeOffset.Now;
         var failures = new List<string>();
         await Task.WhenAll(panes.Select(async pane =>
         {
+            void OnProgress(InventoryRefreshProgress progress)
+            {
+                if (!_closed && ReferenceEquals(targetWindow, _unifiedWindow))
+                    targetWindow?.UpdateRefresh(pane.AccountId, pane.AccountName, progress);
+            }
+            pane.InventoryProgressChanged += OnProgress;
+            var succeeded = false;
+            var reloadRequired = false;
             try
             {
-                await pane.RequestInventoryAsync();
+                var result = await pane.RequestInventoryAsync();
+                succeeded = result == AccountWebViewPane.InventoryRequestStatus.Complete;
+                reloadRequired = result == AccountWebViewPane.InventoryRequestStatus.ReloadRequired;
+                if (!succeeded)
+                {
+                    failures.Add(reloadRequired
+                        ? $"{pane.AccountName}: outcome unknown; Reload required to recover safely"
+                        : $"{pane.AccountName}: incomplete, unavailable or interrupted");
+                }
             }
             catch (Exception ex)
             {
                 failures.Add($"{pane.AccountName}: {ex.Message}");
             }
+            finally
+            {
+                pane.InventoryProgressChanged -= OnProgress;
+                if (!_closed && ReferenceEquals(targetWindow, _unifiedWindow))
+                    targetWindow?.CompleteAccountRefresh(pane.AccountId, pane.AccountName, succeeded, reloadRequired);
+            }
         }));
 
         ScheduleRebuild();
         var elapsed = (int)(DateTimeOffset.Now - started).TotalMilliseconds;
-        _unifiedWindow?.Status(failures.Count == 0
-            ? $"Read {panes.Count} console(s) in {elapsed} ms."
-            : $"Read {panes.Count} console(s) in {elapsed} ms; {string.Join("; ", failures)}");
+        if (!_closed && ReferenceEquals(targetWindow, _unifiedWindow))
+        {
+            targetWindow?.FinishRefresh();
+            targetWindow?.Status(failures.Count == 0
+                ? $"Read {panes.Count} console(s) in {elapsed} ms."
+                : $"Read {panes.Count} console(s) in {elapsed} ms; {string.Join("; ", failures)}");
+        }
     }
 
-    private async Task ConnectByAccountRowAsync(string accountId, int rowIndex)
+    private async Task ConnectByAccountRowAsync(UnifiedInventoryRow selectedRow)
     {
-        var pane = _panes.FirstOrDefault(candidate => string.Equals(candidate.AccountId, accountId, StringComparison.Ordinal));
+        if (_connectInFlight || _closed) return;
+        _connectInFlight = true;
+        var connectionWindow = _unifiedWindow;
+        try { await ConnectByAccountRowCoreAsync(selectedRow, connectionWindow); }
+        catch (Exception)
+        {
+            if (IsCurrentConnectionWindow(connectionWindow))
+                connectionWindow!.Status("The connection could not be completed. Its outcome is unconfirmed; refresh the account before retrying.");
+        }
+        finally { _connectInFlight = false; }
+    }
+
+    private bool IsCurrentConnectionWindow(UnifiedInventoryWindow? window) =>
+        !_closed && window is { IsLoaded: true } && ReferenceEquals(window, _unifiedWindow);
+
+    private async Task ConnectByAccountRowCoreAsync(UnifiedInventoryRow selectedRow, UnifiedInventoryWindow? connectionWindow)
+    {
+        var pane = _panes.FirstOrDefault(candidate => string.Equals(candidate.AccountId, selectedRow.AccountId, StringComparison.Ordinal));
         if (pane is null)
         {
-            _unifiedWindow?.Status("That account is no longer open.");
+            if (IsCurrentConnectionWindow(connectionWindow)) connectionWindow!.Status("That account is no longer open.");
             return;
         }
 
-        var outcome = await pane.ActivateConnectAsync(rowIndex);
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
+        if (!pane.TryCaptureConnectTarget(selectedRow.RowIndexInAccount, selectedRow.ToComputerRow(), out var target) || target is null)
+        {
+            connectionWindow!.Status("The selected row changed before the request began. Refresh the list and select it again.");
+            return;
+        }
+
+        // This is host intent only. No vendor chooser option is claimed before observing it.
+        var proceed = await connectionWindow!.AskConnectionIntentAsync(pane.AccountName);
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
+        if (!proceed)
+        {
+            connectionWindow.Status("Connect cancelled. No console action was performed.");
+            return;
+        }
+
+        connectionWindow.Status($"{pane.AccountName}: preparing the connection…");
+        var outcome = await pane.ActivateConnectAsync(target);
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
         if (outcome != "clicked")
         {
-            _unifiedWindow?.Status(outcome switch
+            connectionWindow.Status(outcome switch
             {
                 "no-table" => $"{pane.AccountName} is not showing the computer list right now; the console was left untouched.",
-                "no-row" => $"{pane.AccountName} no longer shows that row; refresh and try again.",
+                "no-row" or "row-changed" => $"{pane.AccountName}'s selected row or document changed; refresh and select it again.",
                 "no-control" => $"{pane.AccountName}'s row has no Connect control; the console was left untouched.",
                 _ => $"{pane.AccountName} could not be asked to connect ({outcome})."
             });
             return;
         }
 
-        // The console shows its documented chooser after a real Connect. Present that choice
-        // here, in this window, rather than making the user find it in the split view.
+        // The chooser prompt and selection are based only on the actual post-Connect probe.
         var probe = await WaitForChooserAsync(pane);
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
         if (probe is not { Present: true })
         {
-            _unifiedWindow?.Status($"{pane.AccountName}: no connection chooser appeared, so Splashtop started the session directly.");
+            connectionWindow.Status($"{pane.AccountName}: the console did not expose a supported connection chooser. Connection outcome is unconfirmed; no background-pane fallback was requested.");
             return;
         }
 
-        var choice = _unifiedWindow is null
-            ? null
-            : await _unifiedWindow.AskConnectChoiceAsync(pane.AccountName, probe);
+        var choice = await connectionWindow.AskConnectChoiceAsync(pane.AccountName, probe);
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
         if (choice is null)
         {
-            _unifiedWindow?.Status("Connect cancelled. The console is still showing its own dialog if you want it there.");
+            connectionWindow.Status("Connection chooser cancelled. No option was applied; the console may still show its chooser.");
             return;
         }
 
         var applied = await pane.SelectChooserOptionAsync(choice);
-        _unifiedWindow?.Status(applied switch
+        if (!IsCurrentConnectionWindow(connectionWindow)) return;
+        connectionWindow.Status(applied switch
         {
             "clicked" when choice == ConnectionChooser.NativeKey => $"Asked {pane.AccountName} to open this session in the Splashtop Business app.",
             "clicked" => $"Asked {pane.AccountName} to open this session in the web app in that account's browser.",
@@ -263,6 +346,10 @@ internal sealed class AccountBrowserWindow : Window
             }
 
             _unifiedWindow?.Rebuild();
+            if (_inventoryCacheNotice is not null)
+            {
+                _unifiedWindow?.Status(_inventoryCacheNotice);
+            }
         }), DispatcherPriority.Background);
     }
 
@@ -275,6 +362,44 @@ internal sealed class AccountBrowserWindow : Window
         else
         {
             Dispatcher.Invoke(action);
+        }
+    }
+
+    private void LoadCachedInventory()
+    {
+        var cached = InventoryCache.Read(_inventoryCachePath);
+        if (!cached.IsSuccess)
+        {
+            if (cached.FailureReason != InventoryCacheFailureReason.MissingFile)
+            {
+                _inventoryCacheNotice = $"Local cache was not used ({cached.FailureReason}); the list will use current console reads.";
+            }
+
+            return;
+        }
+
+        var configuredProfiles = _profiles.ToDictionary(profile => profile.Id, StringComparer.Ordinal);
+        foreach (var snapshot in cached.Snapshots)
+        {
+            if (configuredProfiles.TryGetValue(snapshot.AccountId, out var profile))
+            {
+                _inventory.Apply(snapshot.ToAccountInventorySnapshot(profile.Name));
+            }
+        }
+    }
+
+    private void PersistInventoryCache()
+    {
+        try
+        {
+            InventoryCache.Write(_inventoryCachePath, _inventory.All);
+            _inventoryCacheNotice = null;
+        }
+        catch (Exception exception)
+        {
+            // Do not surface filesystem paths or exception details that may contain profile data.
+            _inventoryCacheNotice = $"Local cache write failed ({exception.GetType().Name}); current rows remain in memory.";
+            _unifiedWindow?.Status(_inventoryCacheNotice);
         }
     }
 

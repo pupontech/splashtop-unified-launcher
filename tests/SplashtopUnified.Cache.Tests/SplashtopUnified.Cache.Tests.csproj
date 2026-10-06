@@ -1,12 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,11 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInventoryExtractor.cs" Link="ConsoleInventoryExtractor.cs" />
     <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventorySnapshot.cs" Link="InventorySnapshot.cs" />
-    <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryRefreshProgress.cs" Link="InventoryRefreshProgress.cs" />
-    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConnectionChooser.cs" Link="ConnectionChooser.cs" />
-    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInventoryActions.cs" Link="ConsoleInventoryActions.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryCache.cs" Link="InventoryCache.cs" />
   </ItemGroup>
-
 </Project>

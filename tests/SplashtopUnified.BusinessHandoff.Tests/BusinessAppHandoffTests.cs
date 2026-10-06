@@ -52,6 +52,37 @@ public sealed class BusinessAppHandoffTests
     }
 
     [Fact]
+    public void NonUserInitiatedHandoffRequiresExplicitHostConfirmation()
+    {
+        var dispatcher = new RecordingDispatcher();
+        var handoff = new BusinessAppHandoff(dispatcher, () => DateTimeOffset.UnixEpoch);
+        var prompts = 0;
+
+        var rejected = handoff.TryDispatchWithHostConfirmation(
+            BusinessUri, GlobalOrigin, isUserInitiated: false, confirmHost: () => { prompts++; return false; });
+        var accepted = handoff.TryDispatchWithHostConfirmation(
+            BusinessUri, GlobalOrigin, isUserInitiated: false, confirmHost: () => { prompts++; return true; });
+
+        Assert.Equal(BusinessAppHandoffResult.Rejected, rejected);
+        Assert.Equal(BusinessAppHandoffResult.Dispatched, accepted);
+        Assert.Equal(2, prompts);
+        Assert.Equal(new[] { BusinessUri }, dispatcher.ReceivedUris);
+    }
+
+    [Fact]
+    public void InvalidNonUserInitiatedHandoffDoesNotPromptForConfirmation()
+    {
+        var handoff = new BusinessAppHandoff(new RecordingDispatcher());
+        var prompted = false;
+
+        var result = handoff.TryDispatchWithHostConfirmation(
+            "javascript:alert(1)", GlobalOrigin, isUserInitiated: false, confirmHost: () => { prompted = true; return true; });
+
+        Assert.Equal(BusinessAppHandoffResult.Rejected, result);
+        Assert.False(prompted);
+    }
+
+    [Fact]
     public void Repeated_event_paths_for_same_uri_dispatch_only_once()
     {
         var dispatcher = new RecordingDispatcher();

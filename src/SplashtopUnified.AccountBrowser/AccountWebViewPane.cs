@@ -12,18 +12,36 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly WebView2 _webView = new();
     private readonly Action<string> _status;
     private readonly BusinessAppHandoff _businessAppHandoff;
-    private readonly NativeHandoffArm _nativeArm = new();
+    private readonly Func<bool> _confirmNativeHandoff;
     private readonly Action<string, string, bool>? _handoffEventObserver;
     private readonly Action<AccountInventorySnapshot>? _inventoryObserver;
     private readonly List<PopupWindow> _popups = [];
     private CoreWebView2Environment? _environment;
     private int _inventoryGeneration;
-    private int _reportedGeneration = -1;
-    private int _lastMessageGeneration = -1;
     private ConsolePageKind _reportedPageKind = ConsolePageKind.Unknown;
-    private bool _walkInFlight;
-    private DateTimeOffset _walkStartedAtUtc;
+    private readonly object _inventorySync = new();
+    private readonly InventoryRequestLifecycle<InventoryRequest> _inventoryRequestLifecycle = new();
+    private IReadOnlyList<ExtractedComputerRow> _lastExtractedRows = [];
+    private string? _lastRowsDocumentSource;
+    private int _lastRowsGeneration = -1;
     private bool _disposed;
+
+    private sealed class InventoryRequest(string requestId, int generation, string documentSource)
+    {
+        public string RequestId { get; } = requestId;
+        public int Generation { get; } = generation;
+        public string DocumentSource { get; } = documentSource;
+        public TaskCompletionSource<ConsoleInventoryRead?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed record InventoryRequestAttempt(ConsoleInventoryRead? Read, bool ReloadRequired);
+
+    internal enum InventoryRequestStatus
+    {
+        Complete,
+        Failed,
+        ReloadRequired
+    }
 
     public AccountWebViewPane(
         Action<string> status,
@@ -31,10 +49,12 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         Action<string, string, bool>? handoffEventObserver = null,
         string accountId = "",
         string accountName = "",
-        Action<AccountInventorySnapshot>? inventoryObserver = null)
+        Action<AccountInventorySnapshot>? inventoryObserver = null,
+        Func<bool>? nativeHandoffConfirmation = null)
     {
         _status = status;
         _businessAppHandoff = new BusinessAppHandoff(businessAppUriDispatcher ?? new ShellBusinessAppUriDispatcher());
+        _confirmNativeHandoff = nativeHandoffConfirmation ?? ConfirmNativeHandoff;
         _handoffEventObserver = handoffEventObserver;
         _inventoryObserver = inventoryObserver;
         AccountId = accountId;
@@ -153,6 +173,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
 
         _disposed = true;
+        InvalidateInventoryForNavigation();
         foreach (var popup in _popups.ToArray())
         {
             popup.Close();
@@ -184,90 +205,152 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         core.NavigationStarting += OnNavigationStarting;
         core.NewWindowRequested += OnNewWindowRequested;
         core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
-        InstallNativePreference(core, _nativeArm, _status);
+        InstallNativePreference(core, _status);
         InstallInventoryExtraction(core);
     }
 
-    /// <summary>
-    /// Loads the read-only console inventory extractor into every official console page and
-    /// accepts its message only from the trusted console origin and the exact fixed script.
-    /// </summary>
     private void InstallInventoryExtraction(CoreWebView2 core)
     {
-        core.NavigationCompleted += (_, _) => ReadInventoryAfterNavigation();
+        core.NavigationCompleted += OnInventoryNavigationCompleted;
         core.WebMessageReceived += (_, args) => HandleInventoryMessage(args);
     }
 
-    /// <summary>
-    /// Runs the extractor after a navigation and stops as soon as the current document has
-    /// reported a computer list. Retrying is bounded, conditional, and never overlaps an
-    /// in-flight walk: the in-page walk is asynchronous, so a second request would fight it
-    /// for the same scroll position and could publish a partial list.
-    /// </summary>
-    private async void ReadInventoryAfterNavigation()
+    private void OnInventoryNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
     {
-        var generation = ++_inventoryGeneration;
+        if (args.IsSuccess && !_disposed)
+        {
+            _ = ReadInventoryAfterNavigation(_inventoryGeneration);
+        }
+    }
+
+    private async Task ReadInventoryAfterNavigation(int generation)
+    {
         for (var attempt = 0; attempt < 3 && !_disposed; attempt++)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 350 : 700));
-            if (_disposed || _webView.CoreWebView2 is null)
+            if (_disposed || _webView.CoreWebView2 is null || generation != _inventoryGeneration)
             {
                 return;
             }
 
-            if (HasConfidentReadFor(generation) || !await WaitForIdleWalksAsync())
+            if (HasConfidentReadFor(generation))
             {
                 return;
+            }
+
+            var read = (await StartInventoryRequestAsync(generation)).Read;
+            if (read is null || read.PageKind == ConsolePageKind.ComputerList)
+            {
+                return;
+            }
+        }
+    }
+
+    private bool HasConfidentReadFor(int generation)
+    {
+        lock (_inventorySync)
+        {
+            return _lastRowsGeneration == generation && _reportedPageKind == ConsolePageKind.ComputerList;
+        }
+    }
+
+    private async Task<InventoryRequestAttempt> StartInventoryRequestAsync(int generation, bool joinMatchingActive = false)
+    {
+        var core = _webView.CoreWebView2;
+        if (_disposed || core is null || !IsOfficialConsoleOrigin(core.Source))
+        {
+            return new InventoryRequestAttempt(null, false);
+        }
+
+        InventoryRequest request;
+        bool started;
+        lock (_inventorySync)
+        {
+            if (_disposed || generation != _inventoryGeneration ||
+                !string.Equals(core.Source, _webView.CoreWebView2?.Source, StringComparison.Ordinal))
+            {
+                return new InventoryRequestAttempt(null, _inventoryRequestLifecycle.HasActiveRequest);
+            }
+
+            var proposed = new InventoryRequest(Guid.NewGuid().ToString("N"), generation, core.Source);
+            if (!_inventoryRequestLifecycle.TryBeginOrJoin(
+                    new InventoryRequestKey(generation, core.Source), proposed, joinMatchingActive, out request, out started))
+            {
+                return new InventoryRequestAttempt(null, _inventoryRequestLifecycle.HasActiveRequest);
+            }
+        }
+
+        var hostDeadline = Task.Delay(TimeSpan.FromMilliseconds(ConsoleInventoryExtractor.MaxWalkMillis + 5000));
+        if (started)
+        {
+            Task<string> execution;
+            try
+            {
+                execution = core.ExecuteScriptAsync(ConsoleInventoryExtractor.CreateExtractScript(request.RequestId));
+            }
+            catch (Exception)
+            {
+                lock (_inventorySync)
+                {
+                    if (_inventoryRequestLifecycle.TryComplete(request))
+                    {
+                        request.Completion.TrySetResult(null);
+                    }
+                }
+
+                _status("The console inventory script could not be started; no page walk is active. Retry Refresh.");
+                return new InventoryRequestAttempt(null, false);
+            }
+
+            if (await Task.WhenAny(execution, hostDeadline) != execution)
+            {
+                _status("Inventory read timed out; outcome is unknown. Reload this account page to release the active page lock, then retry.");
+                return new InventoryRequestAttempt(null, true);
             }
 
             try
             {
-                _walkInFlight = true;
-                _walkStartedAtUtc = DateTimeOffset.UtcNow;
-                await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+                await execution;
             }
             catch (Exception)
             {
-                _walkInFlight = false;
-                return;
+                _status("Inventory script completion is unknown. Reload this account page to release the active page lock, then retry.");
+                return new InventoryRequestAttempt(null, true);
             }
-
-            // The page owns the walk from here; wait for its one message before deciding
-            // whether another attempt is worth starting.
-            await WaitForMessageAsync(generation, TimeSpan.FromMilliseconds(attempt == 0 ? 3000 : 20000));
         }
-    }
 
-    private bool HasConfidentReadFor(int generation) =>
-        _reportedGeneration == generation && _reportedPageKind == ConsolePageKind.ComputerList;
-
-    private bool WalkInFlight =>
-        _walkInFlight && DateTimeOffset.UtcNow - _walkStartedAtUtc < TimeSpan.FromSeconds(60);
-
-    /// <summary>Waits out any walk the page is still running. False when the pane was disposed.</summary>
-    private async Task<bool> WaitForIdleWalksAsync()
-    {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
-        while (WalkInFlight && !_disposed && DateTimeOffset.UtcNow < deadline)
+        if (await Task.WhenAny(request.Completion.Task, hostDeadline) != request.Completion.Task)
         {
-            await Task.Delay(100);
+            // A timeout is unknown: keep the page-side lock until the exact response or navigation.
+            _status("Inventory read timed out; outcome is unknown. Reload this account page to release the active page lock, then retry.");
+            return new InventoryRequestAttempt(null, true);
         }
 
-        return !_disposed;
+        return new InventoryRequestAttempt(await request.Completion.Task, false);
     }
 
-    private async Task WaitForMessageAsync(int generation, TimeSpan timeout)
+    private void InvalidateInventoryForNavigation()
     {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (_lastMessageGeneration < generation && !_disposed && DateTimeOffset.UtcNow < deadline)
+        InventoryRequest? staleRequest;
+        lock (_inventorySync)
         {
-            await Task.Delay(80);
+            _inventoryGeneration++;
+            _reportedPageKind = ConsolePageKind.Unknown;
+            _lastExtractedRows = [];
+            _lastRowsDocumentSource = null;
+            _lastRowsGeneration = -1;
+            staleRequest = _inventoryRequestLifecycle.Invalidate();
         }
+
+        staleRequest?.Completion.TrySetResult(null);
     }
+
+    public event Action<InventoryRefreshProgress>? InventoryProgressChanged;
 
     private void HandleInventoryMessage(CoreWebView2WebMessageReceivedEventArgs args)
     {
-        if (!IsOfficialConsoleOrigin(args.Source))
+        if (!IsOfficialConsoleOrigin(args.Source) || _webView.CoreWebView2 is not { } core ||
+            !IsOfficialConsoleOrigin(core.Source))
         {
             return;
         }
@@ -282,15 +365,41 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             return;
         }
 
-        if (!ConsoleInventoryExtractor.TryParse(json, out var read) || read is null)
+        var progressRequest = _inventoryRequestLifecycle.ActiveRequest;
+        if (progressRequest is not null && progressRequest.Generation == _inventoryGeneration &&
+            string.Equals(args.Source, progressRequest.DocumentSource, StringComparison.Ordinal) &&
+            string.Equals(core.Source, progressRequest.DocumentSource, StringComparison.Ordinal) &&
+            InventoryRefreshProgress.TryParse(json, progressRequest.RequestId, out var progress) && progress is not null)
         {
+            InventoryProgressChanged?.Invoke(progress);
             return;
         }
 
-        _reportedGeneration = _inventoryGeneration;
-        _lastMessageGeneration = _inventoryGeneration;
-        _reportedPageKind = read.PageKind;
-        _walkInFlight = false;
+        InventoryRequest? request;
+        ConsoleInventoryRead? read;
+        lock (_inventorySync)
+        {
+            // Request IDs and source URLs correlate this response to current host work;
+            // they are not authentication against JavaScript in a trusted-origin page.
+            request = _inventoryRequestLifecycle.ActiveRequest;
+            if (request is null || request.Generation != _inventoryGeneration ||
+                !string.Equals(args.Source, request.DocumentSource, StringComparison.Ordinal) ||
+                !string.Equals(core.Source, request.DocumentSource, StringComparison.Ordinal) ||
+                !ConsoleInventoryExtractor.TryParse(json, request.RequestId, out read) || read is null)
+            {
+                return;
+            }
+
+            if (!_inventoryRequestLifecycle.TryComplete(request))
+            {
+                return;
+            }
+            _reportedPageKind = read.PageKind;
+            _lastExtractedRows = read.Rows;
+            _lastRowsDocumentSource = request.DocumentSource;
+            _lastRowsGeneration = request.Generation;
+            request.Completion.TrySetResult(read);
+        }
 
         var capturedAt = DateTimeOffset.Now;
         var snapshot = new AccountInventorySnapshot(
@@ -319,18 +428,21 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
                uri.UserInfo.Length == 0 && uri.IsDefaultPort;
     }
 
-    /// <summary>
-    /// Read-only structural survey of the owning console page, used to diagnose a list that
-    /// does not match the documented columns. Returns counts and labels only.
-    /// </summary>
+    /// <summary>Returns an aggregate structural survey with no page-derived labels or samples.</summary>
     public async Task<string> InspectConsoleAsync()
     {
-        if (_webView.CoreWebView2 is null)
+        if (_webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
         {
             return "{}";
         }
 
-        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.DiagnosticsScript);
+        var source = core.Source;
+        var raw = await core.ExecuteScriptAsync(ConsoleInventoryExtractor.DiagnosticsScript);
+        if (!string.Equals(source, core.Source, StringComparison.Ordinal) || !IsOfficialConsoleOrigin(core.Source))
+        {
+            return "{}";
+        }
+
         try
         {
             return JsonSerializer.Deserialize<string>(raw) ?? "{}";
@@ -342,17 +454,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     /// <summary>
-    /// Reads the owning console's documented connect chooser. Returns null when the chooser
-    /// is absent, so a page change can never be mistaken for a chooser.
+    /// Reads the owning console's documented connect chooser. Both the host and script
+    /// require the current top-level document to remain on an official HTTPS origin.
     /// </summary>
     public async Task<ChooserProbe?> ProbeChooserAsync()
     {
-        if (_webView.CoreWebView2 is null)
+        if (_webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
         {
             return null;
         }
 
-        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConnectionChooser.ProbeScript);
+        var source = core.Source;
+        var raw = await core.ExecuteScriptAsync(ConnectionChooser.ProbeScript);
+        if (!string.Equals(source, core.Source, StringComparison.Ordinal) || !IsOfficialConsoleOrigin(core.Source))
+        {
+            return null;
+        }
+
         string json;
         try
         {
@@ -369,51 +487,134 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     /// <summary>Applies the chosen documented option inside the owning console page.</summary>
     public async Task<string> SelectChooserOptionAsync(string optionKey)
     {
-        if (_webView.CoreWebView2 is null)
+        if (_webView.CoreWebView2 is not { } core)
         {
             return "no-webview";
         }
 
-        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConnectionChooser.SelectScript(optionKey));
-        return raw.Trim('"');
+        if (!IsOfficialConsoleOrigin(core.Source))
+        {
+            return "blocked-origin";
+        }
+
+        var source = core.Source;
+        var raw = await core.ExecuteScriptAsync(ConnectionChooser.SelectScript(optionKey));
+        return string.Equals(source, core.Source, StringComparison.Ordinal) && IsOfficialConsoleOrigin(core.Source)
+            ? raw.Trim('"')
+            : "blocked-origin";
     }
 
     /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
-    public async Task RequestInventoryAsync()
+    public async Task<InventoryRequestStatus> RequestInventoryAsync()
     {
-        // One walk per account at a time. The in-page walk is asynchronous, so starting a
-        // second one would fight the first for the same scroll position.
-        if (!await WaitForIdleWalksAsync() || _webView.CoreWebView2 is null)
+        var generation = _inventoryGeneration;
+        var attempt = await StartInventoryRequestAsync(generation, joinMatchingActive: true);
+        if (attempt.ReloadRequired)
         {
-            return;
+            return InventoryRequestStatus.ReloadRequired;
         }
 
-        try
+        return attempt.Read is { PageKind: ConsolePageKind.ComputerList, Outcome: InventoryOutcome.Complete }
+            ? InventoryRequestStatus.Complete
+            : InventoryRequestStatus.Failed;
+    }
+
+    /// <summary>Captures selected row identity plus the exact document and extraction generation.</summary>
+    public bool TryCaptureConnectTarget(int rowIndex, ExtractedComputerRow selectedRow, out InventoryActionTarget? target)
+    {
+        ArgumentNullException.ThrowIfNull(selectedRow);
+        target = null;
+        if (_disposed || _webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
         {
-            _walkInFlight = true;
-            _walkStartedAtUtc = DateTimeOffset.UtcNow;
-            await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryExtractor.ExtractScript);
+            return false;
         }
-        catch (Exception)
+
+        lock (_inventorySync)
         {
-            _walkInFlight = false;
-            throw;
+            if (_disposed || _lastRowsGeneration != _inventoryGeneration ||
+                !string.Equals(_lastRowsDocumentSource, core.Source, StringComparison.Ordinal) ||
+                rowIndex < 0 || rowIndex >= _lastExtractedRows.Count)
+            {
+                return false;
+            }
+
+            var captured = new InventoryActionTarget(AccountId, rowIndex, core.Source, _inventoryGeneration, selectedRow);
+            if (!ConsoleInventoryActionGuard.IsCurrentTarget(captured, AccountId, rowIndex, core.Source,
+                    _inventoryGeneration, _lastExtractedRows[rowIndex]))
+            {
+                return false;
+            }
+
+            target = captured;
+            return true;
         }
     }
 
     /// <summary>
-    /// Connects using the owning account's own console row, so the official client path is
-    /// preserved and no remote-session URL is constructed here.
+    /// Connects only when the immutable target still matches this account, document,
+    /// generation, row position and all visible fields after any foreground prompt.
+    /// The page script repeats that identity check against the live DOM before clicking.
     /// </summary>
-    public async Task<string> ActivateConnectAsync(int rowIndex)
+    public async Task<string> ActivateConnectAsync(InventoryActionTarget target)
     {
-        if (_webView.CoreWebView2 is null)
+        ArgumentNullException.ThrowIfNull(target);
+        if (_disposed || _webView.CoreWebView2 is not { } core)
         {
             return "no-webview";
         }
 
-        var raw = await _webView.CoreWebView2.ExecuteScriptAsync(ConsoleInventoryActions.ActivateConnectScript(rowIndex));
-        return raw.Trim('"');
+        if (!IsOfficialConsoleOrigin(core.Source))
+        {
+            return "blocked-origin";
+        }
+
+        lock (_inventorySync)
+        {
+            if (_lastRowsGeneration != _inventoryGeneration ||
+                !string.Equals(_lastRowsDocumentSource, core.Source, StringComparison.Ordinal) ||
+                target.RowIndex < 0 || target.RowIndex >= _lastExtractedRows.Count ||
+                !ConsoleInventoryActionGuard.IsCurrentTarget(target, AccountId, target.RowIndex, core.Source,
+                    _inventoryGeneration, _lastExtractedRows[target.RowIndex]))
+            {
+                return "row-changed";
+            }
+        }
+
+        if (!target.Row.HasConnectControl)
+        {
+            return "no-control";
+        }
+
+        var source = core.Source;
+        var generation = target.Generation;
+        var raw = await core.ExecuteScriptAsync(ConsoleInventoryActions.ActivateConnectScript(target.RowIndex, target.Row));
+        return string.Equals(source, core.Source, StringComparison.Ordinal) && generation == _inventoryGeneration && IsOfficialConsoleOrigin(core.Source)
+            ? raw.Trim('"')
+            : "row-changed";
+    }
+
+    /// <summary>Compatibility convenience for smoke tests that activate without a modal prompt.</summary>
+    public Task<string> ActivateConnectAsync(int rowIndex)
+    {
+        if (_webView.CoreWebView2 is null || rowIndex < 0 || rowIndex >= _lastExtractedRows.Count)
+        {
+            return Task.FromResult("no-row");
+        }
+
+        ExtractedComputerRow selectedRow;
+        lock (_inventorySync)
+        {
+            if (rowIndex < 0 || rowIndex >= _lastExtractedRows.Count)
+            {
+                return Task.FromResult("no-row");
+            }
+
+            selectedRow = _lastExtractedRows[rowIndex];
+        }
+
+        return TryCaptureConnectTarget(rowIndex, selectedRow, out var target) && target is not null
+            ? ActivateConnectAsync(target)
+            : Task.FromResult("no-row");
     }
 
     /// <summary>
@@ -428,11 +629,19 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         core.Settings.IsGeneralAutofillEnabled = true;
     }
 
+    private static bool ConfirmNativeHandoff() =>
+        MessageBox.Show(
+            "WebView2 could not verify a direct user gesture for this Splashtop Business handoff. Open the Business app only if you just selected its option in the console's connection chooser.",
+            "Confirm Splashtop Business handoff",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+
     /// <summary>
-    /// Installs the documented-chooser preference script and opens the bounded
-    /// host allowance only for a validated "armed" message from the exact console.
+    /// Installs the documented-chooser preference script. Its page messages are advisory
+    /// only and are never used to authorize a native protocol handoff.
     /// </summary>
-    private static void InstallNativePreference(CoreWebView2 core, NativeHandoffArm arm, Action<string> status)
+    private static void InstallNativePreference(CoreWebView2 core, Action<string> status)
     {
         _ = core.AddScriptToExecuteOnDocumentCreatedAsync(NativeConnectionPreference.InstallScript)
             .ContinueWith(
@@ -440,76 +649,19 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
                 TaskScheduler.Default);
-        core.WebMessageReceived += (_, args) => HandleNativePreferenceMessage(args, arm, status);
-    }
-
-    private static void HandleNativePreferenceMessage(
-        CoreWebView2WebMessageReceivedEventArgs args,
-        NativeHandoffArm arm,
-        Action<string> status)
-    {
-        if (!Uri.TryCreate(args.Source, UriKind.Absolute, out var source) ||
-            !string.Equals(source.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(source.Host, "my.splashtop.com", StringComparison.OrdinalIgnoreCase) ||
-            source.UserInfo.Length != 0 || !source.IsDefaultPort)
-        {
-            return;
-        }
-
-        string json;
-        try
-        {
-            json = args.TryGetWebMessageAsString();
-        }
-        catch (Exception)
-        {
-            return;
-        }
-
-        if (string.IsNullOrEmpty(json) || json.Length > 2048)
-        {
-            return;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("source", out var sourceProperty) ||
-                sourceProperty.ValueKind != JsonValueKind.String ||
-                !string.Equals(sourceProperty.GetString(), NativeConnectionPreference.MessageSource, StringComparison.Ordinal) ||
-                !root.TryGetProperty("version", out var versionProperty) ||
-                versionProperty.ValueKind != JsonValueKind.Number ||
-                !versionProperty.TryGetInt32(out var version) ||
-                version != NativeConnectionPreference.ScriptVersion ||
-                !root.TryGetProperty("type", out var typeProperty) ||
-                typeProperty.ValueKind != JsonValueKind.String)
-            {
-                return;
-            }
-
-            var type = typeProperty.GetString();
-            switch (type)
-            {
-                case "armed":
-                    arm.Open();
-                    status("Connect was recognised. Preferring the Splashtop Business app for this connection.");
-                    break;
-                case "failed":
-                    status("Could not prepare the Business-app preference on this page; use the connection chooser shown by Splashtop.");
-                    break;
-            }
-        }
-        catch (JsonException)
-        {
-            // Ignore non-JSON or unrelated page messages.
-        }
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
-        if (!IsWebUri(args.Uri))
+        if (IsWebUri(args.Uri))
+        {
+            InvalidateInventoryForNavigation();
+            _inventoryObserver?.Invoke(new AccountInventorySnapshot(
+                AccountId, AccountName, InventoryOutcome.Unavailable, ConsolePageKind.Unknown,
+                ConsoleAuthentication.Unknown, 0, null, [], DateTimeOffset.UtcNow,
+                "Console navigation started; retained rows are from the previous document."));
+        }
+        else
         {
             _handoffEventObserver?.Invoke(nameof(OnNavigationStarting), args.Uri, args.IsUserInitiated);
         }
@@ -536,12 +688,12 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     private void HandleBusinessAppUri(string uri, string? initiatingOrigin, bool isUserInitiated) =>
-        HandleBusinessAppUri(uri, initiatingOrigin, isUserInitiated, _status, _businessAppHandoff, _nativeArm);
+        HandleBusinessAppUri(uri, initiatingOrigin, isUserInitiated, _status, _businessAppHandoff, _confirmNativeHandoff);
 
     private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
     {
         _handoffEventObserver?.Invoke(nameof(OnNewWindowRequested), args.Uri, args.IsUserInitiated);
-        await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _nativeArm);
+        await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _confirmNativeHandoff);
     }
 
     private static async Task HandlePopupRequestAsync(
@@ -550,12 +702,13 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         List<PopupWindow> popups,
         Action<string> status,
         BusinessAppHandoff businessAppHandoff,
-        NativeHandoffArm? nativeArm = null)
+        Func<bool> confirmNativeHandoff)
     {
         if (!IsPopupUri(args.Uri))
         {
             args.Handled = true;
-            HandleBusinessAppUri(args.Uri, args.OriginalSourceFrameInfo?.Source, args.IsUserInitiated, status, businessAppHandoff, nativeArm);
+            HandleBusinessAppUri(args.Uri, args.OriginalSourceFrameInfo?.Source, args.IsUserInitiated,
+                status, businessAppHandoff, confirmNativeHandoff);
             return;
         }
 
@@ -569,7 +722,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         var deferral = args.GetDeferral();
         try
         {
-            var popup = new PopupWindow(environment, popups, status, businessAppHandoff, nativeArm);
+            var popup = new PopupWindow(environment, popups, status, businessAppHandoff, confirmNativeHandoff);
             popups.Add(popup);
             popup.Closed += (_, _) => popups.Remove(popup);
             await popup.InitializeAsync();
@@ -601,13 +754,14 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         bool isUserInitiated,
         Action<string> status,
         BusinessAppHandoff businessAppHandoff,
-        NativeHandoffArm? nativeArm = null)
+        Func<bool> confirmNativeHandoff)
     {
-        // The documented chooser's own follow-up arrives as not user initiated.
-        // Accept it only inside a bounded, host-owned allowance opened by a
-        // validated trusted Connect gesture, and consume it on use.
-        var trustedArmActive = !isUserInitiated && nativeArm is not null && nativeArm.Consume();
-        switch (businessAppHandoff.TryDispatch(uri, initiatingOrigin, isUserInitiated, trustedArmActive))
+        // WebView2's user-initiated flag is the only trusted gesture signal. The
+        // page-side chooser script and messages are not authentication. If WebView2
+        // reports a non-user-initiated follow-up, require an explicit native prompt.
+        var result = businessAppHandoff.TryDispatchWithHostConfirmation(
+            uri, initiatingOrigin, isUserInitiated, confirmNativeHandoff);
+        switch (result)
         {
             case BusinessAppHandoffResult.Dispatched:
                 status("Opening the Splashtop Business app for the remote session.");
@@ -616,7 +770,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
                 status("Could not open Splashtop Business. Install or repair the desktop app and confirm its st-business protocol handler is registered.");
                 break;
             case BusinessAppHandoffResult.Rejected:
-                status("Blocked an external or executable URI scheme. Only a user-initiated Splashtop Business link from the trusted console can be opened.");
+                status("Blocked an external or executable URI scheme. Only a user-initiated Splashtop Business link from the trusted console can be opened, or explicitly confirmed in this app.");
                 break;
         }
     }
@@ -627,15 +781,16 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         private readonly List<PopupWindow> _popups;
         private readonly Action<string> _status;
         private readonly BusinessAppHandoff _businessAppHandoff;
-        private readonly NativeHandoffArm? _nativeArm;
+        private readonly Func<bool> _confirmNativeHandoff;
 
-        public PopupWindow(CoreWebView2Environment environment, List<PopupWindow> popups, Action<string> status, BusinessAppHandoff businessAppHandoff, NativeHandoffArm? nativeArm = null)
+        public PopupWindow(CoreWebView2Environment environment, List<PopupWindow> popups, Action<string> status,
+            BusinessAppHandoff businessAppHandoff, Func<bool> confirmNativeHandoff)
         {
             _environment = environment;
             _popups = popups;
             _status = status;
             _businessAppHandoff = businessAppHandoff;
-            _nativeArm = nativeArm;
+            _confirmNativeHandoff = confirmNativeHandoff;
             Title = "Sign-in window · isolated account profile";
             Width = 920;
             Height = 700;
@@ -656,24 +811,22 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             core.NavigationStarting += OnNavigationStarting;
             core.LaunchingExternalUriScheme += OnLaunchingExternalUriScheme;
             core.NewWindowRequested += OnNewWindowRequested;
-            if (_nativeArm is not null)
-            {
-                InstallNativePreference(core, _nativeArm, _status);
-            }
+            InstallNativePreference(core, _status);
         }
 
         private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args) =>
-            await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _nativeArm);
+            await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _confirmNativeHandoff);
 
         private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
         {
-            HandleNavigationStarting(args, WebView.CoreWebView2?.Source, _status, _businessAppHandoff, _nativeArm);
+            HandleNavigationStarting(args, WebView.CoreWebView2?.Source, _status, _businessAppHandoff, _confirmNativeHandoff);
         }
 
         private void OnLaunchingExternalUriScheme(object? sender, CoreWebView2LaunchingExternalUriSchemeEventArgs args)
         {
             args.Cancel = true;
-            HandleBusinessAppUri(args.Uri, args.InitiatingOrigin, args.IsUserInitiated, _status, _businessAppHandoff, _nativeArm);
+            HandleBusinessAppUri(args.Uri, args.InitiatingOrigin, args.IsUserInitiated,
+                _status, _businessAppHandoff, _confirmNativeHandoff);
         }
     }
 
@@ -682,7 +835,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         string? initiatingOrigin,
         Action<string> status,
         BusinessAppHandoff businessAppHandoff,
-        NativeHandoffArm? nativeArm = null)
+        Func<bool> confirmNativeHandoff)
     {
         if (IsWebUri(args.Uri))
         {
@@ -690,6 +843,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
 
         args.Cancel = true;
-        HandleBusinessAppUri(args.Uri, initiatingOrigin, args.IsUserInitiated, status, businessAppHandoff);
+        HandleBusinessAppUri(args.Uri, initiatingOrigin, args.IsUserInitiated,
+            status, businessAppHandoff, confirmNativeHandoff);
     }
 }

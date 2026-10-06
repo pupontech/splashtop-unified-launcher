@@ -66,6 +66,30 @@ internal static class InventoryFixture
             "</script></body></html>";
     }
 
+    public static string PagedDuplicateRowsNoTotalHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Duplicate rows without a total</title></head><body>" +
+        "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table>" +
+        "<nav aria-label='pagination'><button id='prev' aria-label='Previous page'>Previous</button>" +
+        "<span id='page' aria-current='page'></span><button id='next' aria-label='Next page'>Next</button></nav>" +
+        "<script>var pages=[[" +
+        "{n:'Repeated device',d:'shared-device',g:'Synthetic',t:'notes A'}," +
+        "{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}],[" +
+        "{n:'Repeated device',d:'shared-device',g:'Synthetic',t:'notes B'}," +
+        "{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}]];var page=0;" +
+        "function render(){document.getElementById('rows').innerHTML=pages[page].map(function(r){return '<tr><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');" +
+        "document.getElementById('page').textContent='Page '+(page+1);document.getElementById('prev').disabled=page===0;document.getElementById('next').disabled=page===pages.length-1;}" +
+        "document.getElementById('next').onclick=function(){page++;render();};document.getElementById('prev').onclick=function(){page--;render();};render();</script></body></html>";
+
+    public static string VirtualisedIdenticalRowsNoTotalHtml() =>
+        "<!doctype html><html><head><meta charset='utf-8'><title>Indistinguishable virtual rows</title></head><body>" +
+        "<div id='scroller' style='height:80px;overflow-y:auto'><div style='position:relative;height:240px'>" +
+        "<table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table></div></div>" +
+        "<script>var all=[{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'},{n:'Exact duplicate',d:'same-device',g:'Synthetic',t:'same notes'}," +
+        "{n:'Virtual 3',d:'virtual-3',g:'Synthetic',t:''},{n:'Virtual 4',d:'virtual-4',g:'Synthetic',t:''},{n:'Virtual 5',d:'virtual-5',g:'Synthetic',t:''}];" +
+        "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');function render(){var start=Math.floor(scroller.scrollTop/40);" +
+        "var slice=all.slice(start,start+3);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\\\"height:40px\\\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');" +
+        "table.style.transform='translateY('+(start*40)+'px');}scroller.addEventListener('scroll',render);render();</script></body></html>";
+
     /// <summary>
     /// A virtualised list that only renders the rows near the viewport at any moment, the
     /// other shape that truncates a long account. Invented markup, not captured DOM.
@@ -149,9 +173,47 @@ internal static class InventoryFixture
         "<button id='opt-web' onclick=\"window.__chooserChoice='web'\">From the Web App in this browser</button>" +
         "</div></body></html>";
 
+    public static string ShortViewportVirtualisedListHtml() => VirtualisedListHtml(
+        title: "Short viewport computers", total: 24, rowHeight: 40, viewport: 48, repaintDelayMillis: 0);
+
+    public static string SlowRepaintVirtualisedListHtml() => VirtualisedListHtml(
+        title: "Slow repaint computers", total: 24, rowHeight: 40, viewport: 48, repaintDelayMillis: 1100);
+
+    private static string VirtualisedListHtml(string title, int total, int rowHeight, int viewport, int repaintDelayMillis)
+    {
+        var rows = Enumerable.Range(1, total)
+            .Select(i => $"{{n:'Fixture Node {i:D2}',d:'fixture-node-{i}',g:'Synthetic',t:''}}")
+            .ToArray();
+        var render = "function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;" +
+                     "var slice=all.slice(start,start+count);var apply=function(){document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\\\"height:'+RH+'px\\\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\\\"Connect\\\">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px)';};" +
+                     (repaintDelayMillis == 0 ? "apply();}" : $"setTimeout(apply,{repaintDelayMillis});}}");
+
+        return "<!doctype html><html><head><meta charset='utf-8'><title>" + title + "</title>" +
+            "<style>tr{height:" + rowHeight + "px}</style></head><body>" +
+            "<div id='scroller' style='height:" + viewport + "px;overflow-y:auto'>" +
+            "<div style='position:relative;height:" + (total * rowHeight) + "px'>" +
+            "<table id='computers' style='position:absolute;left:0;right:0;top:0'>" +
+            "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead>" +
+            "<tbody id='rows'></tbody></table></div></div>" +
+            "<p role='status'>" + total + " computers</p>" +
+            "<script>var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
+            "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');" +
+            render + "scroller.addEventListener('scroll',render);render();</script></body></html>";
+    }
+
+    public static string ReconciledScrollableListHtml()
+    {
+        var rows = string.Concat(Enumerable.Range(1, 5).Select(i =>
+            $"<tr style='height:50px'><td>Reconciled {i}</td><td>fixture-{i}</td><td>Synthetic</td><td></td><td><button aria-label='Connect'>Connect</button></td></tr>"));
+        return "<!doctype html><html><head><meta charset='utf-8'><title>Reconciled list</title></head><body>" +
+            "<div id='scroller' style='height:80px;overflow-y:auto' onscroll=\"window.__reconcileScrolls=(window.__reconcileScrolls||0)+1\">" +
+            "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody>" + rows +
+            "</tbody></table></div><p role='status'>5 computers</p></body></html>";
+    }
+
     private static string Row(string name, string device, string group, string notes, bool connect, string? status = null) =>
         "<tr>" +
-        $"<td><span class='os-icon' aria-hidden='true'></span>" +
+        "<td><span class='os-icon' aria-hidden='true'></span>" +
         (status is null ? string.Empty : $"<span class='status-dot' aria-label='{status}' title='{status}'></span>") +
         $"{name}</td>" +
         $"<td>{device}</td><td>{group}</td><td>{notes}</td>" +

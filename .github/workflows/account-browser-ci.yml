@@ -74,7 +74,7 @@ jobs:
           }
           Write-Host "Verified WebView2 Evergreen Runtime $($versions[0].Version) at $($versions[0].RegistryPath)."
 
-      - name: Test Business app handoff policy
+      - name: Test handoff, extraction, and cache policies
         shell: pwsh
         run: |
           dotnet test tests/SplashtopUnified.BusinessHandoff.Tests/SplashtopUnified.BusinessHandoff.Tests.csproj --configuration Release --verbosity normal
@@ -82,6 +82,11 @@ jobs:
           dotnet test tests/SplashtopUnified.NativePreference.Tests/SplashtopUnified.NativePreference.Tests.csproj --configuration Release --verbosity normal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet test tests/SplashtopUnified.Extractor.Tests/SplashtopUnified.Extractor.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.Cache.Tests/SplashtopUnified.Cache.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.RequestLifecycle.Tests/SplashtopUnified.RequestLifecycle.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish, run two isolated real-runtime smoke tests, and package
         shell: pwsh

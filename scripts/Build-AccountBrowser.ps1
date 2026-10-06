@@ -213,6 +213,39 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.nativeHandoff.untrustedOriginRejected -ne $true) {
         throw 'Real WebView2 Business-app handoff proof is missing or failed.'
     }
+    if ($runtimeResult.nativeHandoff.popupNewWindowRequested -ne $true) {
+        throw 'Real WebView2 popup handoff evidence is missing or did not raise NewWindowRequested.'
+    }
+    $delayedHandoff = $runtimeResult.nativeHandoff.scriptTriggeredChooserFollowUp
+    if ($null -eq $delayedHandoff -or
+        $delayedHandoff.PSObject.Properties.Name -notcontains 'uri' -or
+        $delayedHandoff.PSObject.Properties.Name -notcontains 'events' -or
+        $delayedHandoff.PSObject.Properties.Name -notcontains 'dispatched' -or
+        $delayedHandoff.uri -ne 'st-business://com.splashtop.business?source=delayed-redirect' -or
+        $delayedHandoff.dispatched -isnot [bool]) {
+        throw 'Real WebView2 delayed chooser-follow-up evidence is missing or malformed.'
+    }
+    $delayedEvents = @($delayedHandoff.events)
+    if ($delayedEvents.Count -eq 0) {
+        throw 'The delayed Business-app URI has no recorded WebView2 event evidence.'
+    }
+    $delayedWasUserInitiated = $false
+    foreach ($delayedEvent in $delayedEvents) {
+        if ($null -eq $delayedEvent -or
+            $delayedEvent.PSObject.Properties.Name -notcontains 'eventName' -or
+            $delayedEvent.PSObject.Properties.Name -notcontains 'isUserInitiated' -or
+            $delayedEvent.isUserInitiated -isnot [bool] -or
+            [string]::IsNullOrWhiteSpace([string]$delayedEvent.eventName) -or
+            $delayedEvent.eventName -notin @('OnLaunchingExternalUriScheme', 'OnNavigationStarting')) {
+            throw 'The delayed Business-app URI contains incomplete or unexpected WebView2 event evidence.'
+        }
+        if ($delayedEvent.isUserInitiated) {
+            $delayedWasUserInitiated = $true
+        }
+    }
+    if ([bool]$delayedHandoff.dispatched -ne $delayedWasUserInitiated) {
+        throw 'The delayed Business-app URI dispatch does not agree with WebView2 user-gesture evidence.'
+    }
     if ($runtimeResult.credentialSaving.passwordAutosaveEnabled -ne $true -or
         $runtimeResult.credentialSaving.generalAutofillEnabled -ne $true) {
         throw 'Engine-managed password saving was not enabled in both isolated account profiles.'
@@ -256,6 +289,20 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.inventory.largeWallMillis -ge 15000 -or
         $runtimeResult.inventory.largeWalkMillis -ge 12000) {
         throw 'Reading the console list exceeded the refresh budget.'
+    }
+    if ($runtimeResult.inventory.overlapLockRetained -ne $true -or
+        $runtimeResult.inventory.shortViewportRows -ne 24 -or
+        $runtimeResult.inventory.slowRepaintOutcome -ne 'Incomplete' -or
+        $runtimeResult.inventory.reconciledRows -ne 5 -or
+        $runtimeResult.inventory.reconciledScrollEvents -ne '0') {
+        throw 'The short-viewport, bounded-repaint, count-reconciliation, or overlapping-walk evidence is missing or failed.'
+    }
+    if ($runtimeResult.inventory.pagedDuplicateRows -ne 4 -or
+        $runtimeResult.inventory.pagedDuplicateOutcome -ne 'Complete' -or
+        $runtimeResult.inventory.pagedDuplicateExactMultiplicity -ne 2 -or
+        $runtimeResult.inventory.pagedDuplicateNotesPreserved -ne $true -or
+        $runtimeResult.inventory.virtualDuplicateOutcome -ne 'Incomplete') {
+        throw 'Duplicate row multiplicity or ambiguous virtual-list evidence failed.'
     }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
@@ -381,18 +428,20 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 2. Extract the complete ZIP to a writable folder. Keep `START.bat`, the application executable, `WebView2Loader.dll`, the managed WebView2 assemblies, and all other files together.
 3. Double-click `START.bat` (or run `SplashtopUnified.AccountBrowser.exe`).
 4. Sign in only on the official Splashtop page inside the app. Complete any MFA, SSO, CAPTCHA, or new-device verification normally. Your browser login can be remembered: each account has its own isolated browser profile, and the engine may offer to save and reuse the console password inside that profile. The app itself never reads, asks for, or stores the password, and it does not export cookies or tokens.
-5. Click `Open unified list`. The app reads each account's own console computer list (columns Name, Device Name, Group, Notes, plus each row's own online/offline indicator), merges every account's rows into one native list, and marks each row with the account it came from. `Refresh from consoles` re-reads both consoles. `Connect` on a row asks that row's own account console to start the session, so Splashtop's own client path is used.
-6. The `Status` column shows what the console's indicators say (for example `Online`, `Offline`, `In use`) and the summary line reports how many rows are online. If a list shows no indicators, the column stays blank and the summary says status was not reported - the app never guesses a status from a device name or anything else.
-7. The merged list is read-only and honest about its limits: because the console list shows no numeric computer identity, rows are never merged or de-duplicated by name, and a read is reported as incomplete unless the console itself states a total that matches. The reader walks every page and every virtual-scroll window, so a long account is read in full rather than only the rows on screen. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
+5. Click `Open unified list`. This is an experimental reader: CI exercises synthetic local fixture pages, not live account pages, so compatibility with current live console DOM is not established. If a page structure is recognized, the app attempts to show its rows under the account that produced them. Duplicate display names are retained rather than merged, and `Refresh from consoles` requests a fresh read from both accounts.
+6. On a current complete read, the `Status` column shows row indicators (for example `Online`, `Offline`, `In use`) and the summary counts statuses reported by those rows. If a list shows no indicators, the column stays blank and the summary says status was not reported; the app never guesses a status from a device name or anything else.
+7. The merged list is read-only. A read is called complete only when its completeness checks pass; reads that cannot be established as complete remain incomplete. The reader attempts to walk every page and virtual-scroll window it can establish, rather than treating only the currently rendered rows as the full list. A row whose account is not signed in yet shows no rows; sign in and press `Refresh from consoles`.
    Refresh reads every account at the same time, walks the console once per page load, and reports how long each read took (rows, pages and milliseconds) in the per-account line.
-8. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
-9. Pressing `Connect` shows Splashtop's own connect choice as a prompt in this window: `From the Splashtop Business App` or `From the Web App in this browser`, plus `Cancel`. Your answer is applied inside the owning account's console, so the console's own dialog does not need to be found in the split view. If no chooser appears, Splashtop started the session directly and the status line says so.
+8. Cached or non-current row statuses are marked `Cached:`, `Last read:`, `Partial read:`, or `Historical:` as applicable. The per-account summary identifies cached data as `cached (not live)` and notes a retained outcome or latest attempt when available. Cached, partial, historical, and failed-refresh rows cannot be used for `Connect`; a current complete read is required.
+9. During refresh, a percentage is shown only when the console reports a positive total. If the total is unknown, the progress bar remains indeterminate and the label reports the number of rows collected with `total unknown`. An active percentage tops out at 99%; 100% is shown only after a successful complete refresh.
+10. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
+11. Pressing `Connect` on an eligible current row first opens a foreground prompt in the unified-list window with `From the Splashtop Business App` and `Cancel`; cancel leaves the console untouched. After choosing Business, the app asks the owning account's console to connect and applies that option only if the expected chooser is found. This build does not offer a Web App choice. If the chooser is absent or an exception interrupts the attempt, the app reports the outcome as unconfirmed and advises refreshing before retrying. If the console changes before the choice can be applied or does not offer Business, the app reports that and does not select a web fallback.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 
 ## Data and limitations
 
-WebView2 account profiles are runtime data, not package files. Keep the ZIP and its `manifest.json` unchanged; do not copy browser profile data into the package or share it. This is an unsigned prerelease build, not production software, and has not been validated against live accounts by this CI workflow. Never put real account data, credentials, cookies, tokens, or profile files in an issue or CI artifact.
+WebView2 account profiles are runtime data, not package files. The app also keeps an allowlisted inventory cache under `%LOCALAPPDATA%\SplashtopUnified\AccountBrowser\inventory-cache.json`; cached rows are explicitly marked as not live and cannot be used to connect. Keep the ZIP and its `manifest.json` unchanged; do not copy browser profile data into the package or share it. This is an unsigned prerelease build, not production software, and its CI workflow does not validate compatibility with live console pages. Never put real account data, credentials, cookies, tokens, or profile files in an issue or CI artifact.
 
 `manifest.json` records the source commit and SHA-256 hashes for every other packaged file. The accompanying CI `runtime-evidence.json` records the SHA-256 of every ZIP member, including `manifest.json`, along with the archive digest and sanitized Windows runtime smoke-test results.
 '@

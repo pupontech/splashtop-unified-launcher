@@ -43,6 +43,75 @@ public sealed class ConsoleInventoryExtractorTests
     }
 
     [Fact]
+    public void AConsoleTotalAboveTheRenderedRowsIsNeverComplete()
+    {
+        var json = Message("complete", "computerList", "authenticated", 1, 500,
+            """{"name":"Only Fixture","deviceName":"only","group":"","notes":"","hasConnectControl":true}""");
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(json, out var read));
+        Assert.Equal(InventoryOutcome.Incomplete, read!.Outcome);
+    }
+
+    [Fact]
+    public void ANoTotalCompleteClaimRequiresACompletedPagerWalk()
+    {
+        var json = Message("complete", "computerList", "authenticated", 1, null,
+            """{"name":"Only Fixture","deviceName":"only","group":"","notes":"","hasConnectControl":true}""");
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(json, out var incomplete));
+        Assert.Equal(InventoryOutcome.Incomplete, incomplete!.Outcome);
+
+        var valid = json.Replace("\"rows\":[", "\"mode\":\"paged\",\"walkedToEnd\":true,\"rows\":[", StringComparison.Ordinal);
+        Assert.True(ConsoleInventoryExtractor.TryParse(valid, out var complete));
+        Assert.Equal(InventoryOutcome.Complete, complete!.Outcome);
+    }
+
+    [Fact]
+    public void InventoryPayloadMustMatchTheActiveRequestIdentifier()
+    {
+        var json = Message("incomplete", "computerList", "authenticated", 0, null);
+
+        Assert.True(ConsoleInventoryExtractor.TryParse(json, "fixture-request", out _));
+        Assert.False(ConsoleInventoryExtractor.TryParse(json, "another-request", out _));
+        Assert.False(ConsoleInventoryExtractor.TryParse(json.Replace("\"requestId\":\"fixture-request\",", string.Empty, StringComparison.Ordinal), "fixture-request", out _));
+    }
+
+    [Fact]
+    public void ExtractorScriptCorrelatesAndReleasesOnlyItsOwnWalkRequest()
+    {
+        const string requestId = "d8f8252c96de4831b70457354b1e2460";
+        var script = ConsoleInventoryExtractor.CreateExtractScript(requestId);
+
+        Assert.Contains(requestId, script, StringComparison.Ordinal);
+        Assert.Contains("__splashtopInventoryWalkActive === requestId", script, StringComparison.Ordinal);
+        Assert.Contains("payload.requestId = requestId", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtractorScriptUsesStrictHttpsAndDoesNotParseTotalsFromArbitraryBodyText()
+    {
+        var script = ConsoleInventoryExtractor.CreateExtractScript("d8f8252c96de4831b70457354b1e2460");
+
+        Assert.Contains("currentUrl.protocol !== 'https:'", script, StringComparison.Ordinal);
+        Assert.Contains("currentUrl.port !== ''", script, StringComparison.Ordinal);
+        Assert.Contains("new URL(location.href)", script, StringComparison.Ordinal);
+        Assert.Contains("currentUrl.username", script, StringComparison.Ordinal);
+        Assert.Contains("currentUrl.password", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("document.body.textContent", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DiagnosticsScriptDoesNotReturnVisiblePageContent()
+    {
+        var script = ConsoleInventoryExtractor.DiagnosticsScript;
+
+        Assert.DoesNotContain("controlLabels", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("tableHeaders", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("bodyTextSample", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("document.body.textContent", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AConsoleTotalBelowTheRenderedRowsIsNeverComplete()
     {
         var json = Message("complete", "computerList", "authenticated", 2, 1,
@@ -275,6 +344,7 @@ public sealed class ConsoleInventoryExtractorTests
         var total = reportedTotal is null ? "null" : reportedTotal.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var body = string.Join(",", rows);
         return $"{{\"source\":\"{ConsoleInventoryExtractor.MessageSource}\",\"version\":{ConsoleInventoryExtractor.ScriptVersion}," +
+               "\"requestId\":\"fixture-request\"," +
                $"\"outcome\":\"{outcome}\",\"pageKind\":\"{pageKind}\",\"authentication\":\"{authentication}\"," +
                $"\"rowCount\":{rowCount},\"reportedTotal\":{total},\"rows\":[{body}]}}";
     }
