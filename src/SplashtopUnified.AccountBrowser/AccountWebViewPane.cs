@@ -596,6 +596,11 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     /// <summary>Compatibility convenience for smoke tests that activate without a modal prompt.</summary>
     public Task<string> ActivateConnectAsync(int rowIndex)
     {
+        if (_webView.CoreWebView2 is { } core && !IsOfficialConsoleOrigin(core.Source))
+        {
+            return Task.FromResult("blocked-origin");
+        }
+
         if (_webView.CoreWebView2 is null || rowIndex < 0 || rowIndex >= _lastExtractedRows.Count)
         {
             return Task.FromResult("no-row");
