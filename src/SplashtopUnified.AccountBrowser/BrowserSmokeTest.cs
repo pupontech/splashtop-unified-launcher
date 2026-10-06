@@ -458,7 +458,8 @@ internal static class BrowserSmokeTest
         // must leave the original page-side lock value untouched.
         await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive='smoke-owner'");
         await pane.ExecuteScriptAsync(ConsoleInventoryExtractor.CreateExtractScript("smoke-competitor"));
-        var ownerValue = await pane.ExecuteScriptAsync("JSON.stringify(window.__splashtopInventoryWalkActive)");
+        // ExecuteScriptAsync already JSON-encodes its result; avoid stringifying twice.
+        var ownerValue = await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive");
         Require(JsonSerializer.Deserialize<string>(ownerValue) == "smoke-owner",
             "A non-owning inventory invocation cannot clear the page walk lock");
         await pane.ExecuteScriptAsync("window.__splashtopInventoryWalkActive=null");
