@@ -244,6 +244,28 @@ internal static class InventoryCache
     /// <summary>Loads all cached snapshots or returns no snapshots and a reason; cache failures do not escape.</summary>
     public static InventoryCacheReadResult Read(string path)
     {
+        if (string.IsNullOrWhiteSpace(path))
+            return InventoryCacheReadResult.Failed(InventoryCacheFailureReason.IoError);
+
+        try
+        {
+            // Windows replacement can expose a transient unavailable name to a new
+            // opener. Serialize cooperating readers with writers across processes.
+            // Mutex ownership is recursive, so Write can safely read while holding it.
+            using var mutex = new Mutex(initiallyOwned: false, CreateMutexName(Path.GetFullPath(path)));
+            try { mutex.WaitOne(); }
+            catch (AbandonedMutexException) { /* Ownership was acquired. Validate the file normally. */ }
+            try { return ReadCore(path); }
+            finally { mutex.ReleaseMutex(); }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return InventoryCacheReadResult.Failed(InventoryCacheFailureReason.IoError);
+        }
+    }
+
+    private static InventoryCacheReadResult ReadCore(string path)
+    {
         try
         {
             if (string.IsNullOrWhiteSpace(path))
