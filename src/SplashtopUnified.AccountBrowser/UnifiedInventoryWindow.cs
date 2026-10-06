@@ -67,13 +67,15 @@ internal sealed class UnifiedInventoryWindow : Window
             : $"{name}: refreshing — {progress.RowsRead} rows collected (total unknown)";
     }
 
-    public void CompleteAccountRefresh(string id, string name, bool succeeded, bool reloadRequired = false)
+    public void CompleteAccountRefresh(string id, string name, bool succeeded, bool reloadRequired = false, InventoryRefreshKind? kind = null)
     {
         if (!_refreshRows.TryGetValue(id, out var row)) return;
         row.Bar.IsIndeterminate = false;
         row.Bar.Value = succeeded ? 100 : row.Bar.Value;
         row.Label.Text = succeeded ? $"{name}: refresh finished — 100%"
             : reloadRequired ? $"{name}: outcome unknown — Reload required to recover safely"
+            : kind == InventoryRefreshKind.Partial ? $"{name}: partial read — completeness not proven; Connect disabled"
+            : kind == InventoryRefreshKind.Unavailable ? $"{name}: inventory unavailable — see account status or Inspect consoles"
             : $"{name}: refresh failed or interrupted";
     }
 

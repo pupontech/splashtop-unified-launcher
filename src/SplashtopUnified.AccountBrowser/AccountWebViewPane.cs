@@ -40,7 +40,9 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     {
         Complete,
         Failed,
-        ReloadRequired
+        ReloadRequired,
+        Partial,
+        Unavailable
     }
 
     public AccountWebViewPane(
@@ -509,14 +511,14 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     {
         var generation = _inventoryGeneration;
         var attempt = await StartInventoryRequestAsync(generation, joinMatchingActive: true);
-        if (attempt.ReloadRequired)
+        return InventoryRefreshClassification.Classify(attempt.Read?.Outcome, attempt.Read?.PageKind, attempt.ReloadRequired) switch
         {
-            return InventoryRequestStatus.ReloadRequired;
-        }
-
-        return attempt.Read is { PageKind: ConsolePageKind.ComputerList, Outcome: InventoryOutcome.Complete }
-            ? InventoryRequestStatus.Complete
-            : InventoryRequestStatus.Failed;
+            InventoryRefreshKind.Complete => InventoryRequestStatus.Complete,
+            InventoryRefreshKind.Partial => InventoryRequestStatus.Partial,
+            InventoryRefreshKind.Unavailable => InventoryRequestStatus.Unavailable,
+            InventoryRefreshKind.ReloadRequired => InventoryRequestStatus.ReloadRequired,
+            _ => InventoryRequestStatus.Failed
+        };
     }
 
     /// <summary>Captures selected row identity plus the exact document and extraction generation.</summary>

@@ -163,8 +163,9 @@ internal static class ConsoleInventoryExtractor
 
         var virtualDuplicateAmbiguity = false;
         var recordKey = function (record) {
-          return JSON.stringify([record.name, record.deviceName, record.group, record.notes,
-            record.hasConnectControl, record.status]);
+          // Presence and enabled Connect state can change during a walk. They are
+          // observations, not row identity, and must not create extra computer records.
+          return JSON.stringify([record.name, record.deviceName, record.group, record.notes]);
         };
         var collect = function (grid, columnMap, seen, rows, preserveMultiplicity) {
           var nodes = rowElements(grid, columnMap);
@@ -250,6 +251,17 @@ internal static class ConsoleInventoryExtractor
               return poll();
             });
           })();
+        };
+
+        var waitForScrollPaint = async function (scroller, targetTop, maxMillis) {
+          var signature = signatureOf();
+          var repaint = { changed: false };
+          var observer = new MutationObserver(function () { repaint.changed = true; });
+          observer.observe(grid, { childList: true, subtree: true, characterData: true });
+          try {
+            scroller.scrollTop = targetTop;
+            return await waitForChange(signature, Math.min(maxMillis, Math.max(0, walkDeadline - now())), repaint);
+          } finally { observer.disconnect(); }
         };
 
         var disabled = function (element) {
@@ -377,64 +389,86 @@ internal static class ConsoleInventoryExtractor
             }
           }
         } else {
-          // Scroll only the unique visible scroll container that structurally contains the verified grid.
-          var scrollCandidates = Array.prototype.slice.call(document.querySelectorAll('div,[role=grid],[role=region],main,section'))
-            .filter(function (node) {
-              if (node === document.body || node === document.documentElement || !isVisible(node)) { return false; }
-              if (node.scrollHeight <= node.clientHeight + 8) { return false; }
-              var style = window.getComputedStyle(node);
-              return !!style && (style.overflowY === 'auto' || style.overflowY === 'scroll');
-            });
-          var relevant = scrollCandidates.filter(function (node) { return node.contains(grid); });
+          // Probe only structural ancestors of the verified table, nearest first.
+          // A nested page scroller and the document root are not arbitrary ambiguity:
+          // choose the owner whose bounded scroll actually repaints the row window.
+          var documentScroller = document.scrollingElement;
+          var relevant = [];
+          var eligibleScroller = function (node) {
+            if (!node || !isVisible(node) || node.clientHeight <= 1 || node.scrollHeight <= node.clientHeight + 8) { return false; }
+            var style = window.getComputedStyle(node);
+            if (!style) { return false; }
+            return node === documentScroller
+              ? style.overflowY !== 'hidden' && style.overflowY !== 'clip'
+              : style.overflowY === 'auto' || style.overflowY === 'scroll';
+          };
+          var ancestorCount = 0;
+          for (var ancestor = grid; ancestor && ancestorCount++ < 64; ancestor = ancestor.parentElement) {
+            if ((ancestor !== document.body && ancestor !== document.documentElement || ancestor === documentScroller) && eligibleScroller(ancestor)) {
+              relevant.push(ancestor);
+            }
+          }
+          if (documentScroller && relevant.indexOf(documentScroller) === -1 && documentScroller.contains(grid) && eligibleScroller(documentScroller)) {
+            relevant.push(documentScroller);
+          }
           if (relevant.length > 0) { mode = 'scrolled'; }
-          if (relevant.length === 1) {
+          if (relevant.length > 0) {
             rows.forEach(function (record) {
               var key = recordKey(record);
               seen[key] = (seen[key] || 0) + 1;
               if (seen[key] > 1) { virtualDuplicateAmbiguity = true; }
             });
-            var scroller = relevant[0];
-            var viewport = scroller.clientHeight;
-            var stepSize = Math.min(Math.floor(viewport * 0.8), viewport - 1);
-            if (viewport > 1 && stepSize > 0) {
-              var maxScrollTop = Math.max(0, scroller.scrollHeight - viewport);
-              if (scroller.scrollTop !== 0) {
-                var topSignature = signatureOf();
-                scroller.scrollTop = 0;
-                if (!await waitForChange(topSignature, Math.min(1000, Math.max(0, walkDeadline - now())))) { maxScrollTop = -1; }
-              }
-              if (maxScrollTop >= 0) {
-                collect(grid, columnMap, seen, rows, false);
-                for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
-                  if (reportedTotal !== null && rows.length === reportedTotal) { break; }
-                  if (now() >= walkDeadline) { break; }
-                  var previousTop = scroller.scrollTop;
-                  var targetTop = Math.min(previousTop + stepSize, maxScrollTop);
-                  if (targetTop === previousTop) {
-                    walkedToEnd = previousTop + viewport >= scroller.scrollHeight - 8;
+            // Do not move any container when an explicit total already reconciles.
+            if (reportedTotal === null || rows.length !== reportedTotal) {
+              var scroller = null;
+              for (var candidateIndex = 0; candidateIndex < Math.min(relevant.length, 6); candidateIndex++) {
+                if (now() >= walkDeadline) { break; }
+                var candidate = relevant[candidateIndex];
+                var initialTop = candidate.scrollTop;
+                var viewport = candidate.clientHeight;
+                var stepSize = Math.min(Math.floor(viewport * 0.8), viewport - 1);
+                if (stepSize <= 0) { continue; }
+                try {
+                  if (initialTop !== 0) { await waitForScrollPaint(candidate, 0, 1000); }
+                  var candidateRows = [], candidateSeen = Object.create(null);
+                  collect(grid, columnMap, candidateSeen, candidateRows, false);
+                  var probeTop = Math.min(stepSize, Math.max(0, candidate.scrollHeight - viewport));
+                  if (probeTop > 0 && await waitForScrollPaint(candidate, probeTop, 1000) && candidate.scrollTop > 0) {
+                    collect(grid, columnMap, candidateSeen, candidateRows, false);
+                    scroller = candidate;
+                    rows = candidateRows;
+                    seen = candidateSeen;
                     break;
                   }
-                  var scrollSignature = signatureOf();
-                  // An overlapping step may repaint the same logical window (for example
-                  // a 38px step in a 40px row). Observe actual row-tree replacement rather
-                  // than mistaking an unchanged text fingerprint for a hung renderer.
-                  // Unrelated document mutations and scrolling alone are not evidence.
-                  var repaint = { changed: false };
-                  var observer = new MutationObserver(function () { repaint.changed = true; });
-                  observer.observe(grid, { childList: true, subtree: true, characterData: true });
-                  var painted;
-                  try {
-                    scroller.scrollTop = targetTop;
-                    painted = await waitForChange(scrollSignature, Math.min(1000, Math.max(0, walkDeadline - now())), repaint);
-                  } finally { observer.disconnect(); }
-                  if (!painted) { break; }
-                  collect(grid, columnMap, seen, rows, false);
-                  if (reportedTotal !== null && rows.length === reportedTotal) { break; }
-                  if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) { walkedToEnd = true; break; }
+                } finally {
+                  // A failed probe cannot leave an unrelated ancestor displaced.
+                  if (scroller !== candidate && candidate.scrollTop !== initialTop) {
+                    await waitForScrollPaint(candidate, initialTop, 300);
+                  }
                 }
-                var restoreScrollSignature = signatureOf();
-                scroller.scrollTop = 0;
-                await waitForChange(restoreScrollSignature, Math.min(1000, Math.max(0, walkDeadline - now())));
+              }
+              if (scroller) {
+                try {
+                  var viewport = scroller.clientHeight;
+                  var stepSize = Math.min(Math.floor(viewport * 0.8), viewport - 1);
+                  for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
+                    if (reportedTotal !== null && rows.length === reportedTotal) { break; }
+                    if (now() >= walkDeadline) { break; }
+                    var previousTop = scroller.scrollTop;
+                    var maxScrollTop = Math.max(0, scroller.scrollHeight - viewport);
+                    var targetTop = Math.min(previousTop + stepSize, maxScrollTop);
+                    if (targetTop === previousTop) {
+                      walkedToEnd = previousTop + viewport >= scroller.scrollHeight - 8;
+                      break;
+                    }
+                    if (!await waitForScrollPaint(scroller, targetTop, 1000)) { break; }
+                    collect(grid, columnMap, seen, rows, false);
+                    if (reportedTotal !== null && rows.length === reportedTotal) { break; }
+                    if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) { walkedToEnd = true; break; }
+                  }
+                } finally {
+                  if (scroller.scrollTop !== 0) { await waitForScrollPaint(scroller, 0, 1000); }
+                }
               }
             }
           }
@@ -507,6 +541,27 @@ internal static class ConsoleInventoryExtractor
                 columnSpan: cell.colSpan, rowSpan: cell.rowSpan };
             }),
             renderedRows: rows.length,
+            // Bounded structural scroll ancestry only: identity-free enums and numbers,
+            // no attributes, ids, classes or content.
+            scrollAncestors: (function () {
+              var list = [];
+              var documentScroller = document.scrollingElement;
+              var count = 0;
+              for (var node = table; node && count++ < 64; node = node.parentElement) {
+                var isDocument = node === documentScroller;
+                var style = window.getComputedStyle(node);
+                if (!style) { continue; }
+                var scrollable = node === documentScroller
+                  ? style.overflowY !== 'hidden' && style.overflowY !== 'clip'
+                  : style.overflowY === 'auto' || style.overflowY === 'scroll';
+                if (scrollable && node.scrollHeight > node.clientHeight + 8) {
+                  list.push({ depth: list.length, isDocument: isDocument, tag: node.tagName.toLowerCase(),
+                    overflowY: style.overflowY, clientHeight: node.clientHeight, scrollHeight: node.scrollHeight });
+                }
+                if (list.length >= 6) { break; }
+              }
+              return list;
+            })(),
             sampleCellCounts: rows.slice(0, 3).map(function (row) { return row.cells.length; })
           };
         });

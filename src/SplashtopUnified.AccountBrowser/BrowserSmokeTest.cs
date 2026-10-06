@@ -68,6 +68,7 @@ internal static class BrowserSmokeTest
             await File.WriteAllTextAsync(Path.Combine(fixture, "reordered-no-notes.html"), InventoryFixture.ReorderedNoNotesListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "ambiguous-headers.html"), InventoryFixture.AmbiguousComputerNameHeadersHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "nested-rows.html"), InventoryFixture.NestedDecorativeRowsHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "nested-scroll-status.html"), InventoryFixture.NestedScrollWithChangingStatusHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "unsupported.html"), InventoryFixture.UnsupportedContentHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "login.html"), InventoryFixture.LoginHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "paged.html"), InventoryFixture.PagedListHtml());
@@ -498,6 +499,19 @@ internal static class BrowserSmokeTest
         var nestedClickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
         Require(nestedClickCount.Trim() == "1", "The nested-row fixture clicks exactly the intended second computer once");
 
+        var beforeNestedScroll = snapshots.Count;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/nested-scroll-status.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Skip(beforeNestedScroll).Any(item => item.Rows.Count == 48),
+            "the nested-scroll fixture to be read in full through its inner scroll owner",
+            TimeSpan.FromSeconds(30));
+        var nestedScroll = snapshots.Skip(beforeNestedScroll).Last(item => item.Rows.Count == 48);
+        Require(nestedScroll.ReportedTotal == 48 && nestedScroll.Outcome == InventoryOutcome.Complete && nestedScroll.Mode == "scrolled",
+            "Scroll ownership with a page root that also scrolls reads every row exactly once and reconciles the stated total");
+        Require(nestedScroll.Rows.Count(row => row.Name == "Fixture Node 48") == 1,
+            "Changing presence indicators during the walk cannot fabricate extra computer records");
+        Require(nestedScroll.Rows.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() == 48,
+            "Each computer appears exactly once despite status and Connect changes between scroll steps");
+
         var beforeAmbiguous = snapshots.Count;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/ambiguous-headers.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Skip(beforeAmbiguous).Any(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable),
@@ -550,6 +564,8 @@ internal static class BrowserSmokeTest
             reorderedConnectMappedUnique = reorderedRow.HasConnectControl && reorderedClickCount.Trim() == "1",
             changedReorderedIdentityRefused = true,
             nestedRowsExcludedFromConnect = nested.Rows.Count == 2 && nestedClickCount.Trim() == "1",
+            nestedScrollOwnershipReconciled = nestedScroll.Rows.Count == 48 && nestedScroll.ReportedTotal == 48 && nestedScroll.Outcome == InventoryOutcome.Complete && nestedScroll.Mode == "scrolled",
+            statusChangesDoNotDuplicateRows = nestedScroll.Rows.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() == 48,
             capturedRows = read.Rows.Count,
             duplicateDisplayNamesRetained = read.Rows.Count(row => row.Name == "Fixture VM"),
             rowsWithConnectControl = read.Rows.Count(row => row.HasConnectControl),

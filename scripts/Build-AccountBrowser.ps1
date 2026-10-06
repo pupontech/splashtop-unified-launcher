@@ -258,7 +258,9 @@ function Invoke-AccountBrowserSmokeTest {
         'unsupportedContentUnavailable',
         'reorderedConnectMappedUnique',
         'changedReorderedIdentityRefused',
-        'nestedRowsExcludedFromConnect'
+        'nestedRowsExcludedFromConnect',
+        'nestedScrollOwnershipReconciled',
+        'statusChangesDoNotDuplicateRows'
     )
     foreach ($check in $requiredHeaderChecks) {
         if ($runtimeResult.inventory.$check -ne $true) {

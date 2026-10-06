@@ -56,6 +56,32 @@ internal static class InventoryFixture
         "<button aria-label='Connect' onclick=\"window.__connectClicks=(window.__connectClicks||0)+1\">Connect</button></td></tr>" +
         "</tbody></table></body></html>";
 
+    /// <summary>
+    /// Invented shape of the owner report: the table sits inside an inner scrollable
+    /// region and the page root also scrolls, while the row renderer rewrites status
+    /// indicators (and disables Connect) on every scroll step. Scrolling the inner
+    /// region must be recognized as the owner so the full list is read once, status is
+    /// an observation rather than a new row, and no extra records are fabricated.
+    /// </summary>
+    public static string NestedScrollWithChangingStatusHtml()
+    {
+        const int total = 48;
+        var rows = string.Join(",", Enumerable.Range(1, total).Select(i => $"{{n:'Fixture Node {i:D2}',d:'fixture-node-{i}'}}"));
+        return "<!doctype html><html><head><meta charset='utf-8'><title>Synthetic nested scroll status</title></head><body>" +
+            "<div id='page' style='height:200px;overflow-y:auto'><div id='scroller' style='height:320px;overflow-y:auto'>" +
+            "<div style='position:relative;height:" + (total * 40) + "px'>" +
+            "<table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th></th><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead><tbody id='rows'></tbody></table>" +
+            "</div></div><div style='height:1920px'></div></div>" +
+            "<p role='status'>" + total + " computers</p>" +
+            "<script>var all=[" + rows + "];var RH=40;var scroller=document.getElementById('scroller');var table=document.getElementById('computers');var pulse=0;" +
+            "function render(){var start=Math.floor(scroller.scrollTop/RH);var slice=all.slice(start,start+16);" +
+            "document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:'+RH+'px\"><td></td><td>'+r.n+'</td><td>'+r.d+'</td><td>Synthetic</td><td></td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');" +
+            "table.style.transform='translateY('+(start*RH)+'px)';}" +
+            "function restyle(){var labels=['Online','Offline','In use'];pulse=(pulse+1)%labels.length;" +
+            "Array.prototype.forEach.call(document.querySelectorAll('#rows > tr'),function(row){var cell=row.cells[1];var text=cell.textContent;var dot=document.createElement('span');dot.setAttribute('aria-label',labels[pulse]);cell.replaceChildren(dot,document.createTextNode(text));});}" +
+            "scroller.addEventListener('scroll',function(){render();restyle();});render();</script></body></html>";
+    }
+
     public static string AmbiguousComputerNameHeadersHtml() =>
         "<!doctype html><html><head><meta charset='utf-8'><title>Ambiguous headers</title></head><body>" +
         "<table><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Computer Name</th></tr></thead>" +

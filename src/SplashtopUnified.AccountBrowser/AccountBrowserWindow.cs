@@ -149,16 +149,29 @@ internal sealed class AccountBrowserWindow : Window
             pane.InventoryProgressChanged += OnProgress;
             var succeeded = false;
             var reloadRequired = false;
+            var kind = InventoryRefreshKind.Failed;
             try
             {
                 var result = await pane.RequestInventoryAsync();
                 succeeded = result == AccountWebViewPane.InventoryRequestStatus.Complete;
                 reloadRequired = result == AccountWebViewPane.InventoryRequestStatus.ReloadRequired;
+                kind = result switch
+                {
+                    AccountWebViewPane.InventoryRequestStatus.Complete => InventoryRefreshKind.Complete,
+                    AccountWebViewPane.InventoryRequestStatus.Partial => InventoryRefreshKind.Partial,
+                    AccountWebViewPane.InventoryRequestStatus.Unavailable => InventoryRefreshKind.Unavailable,
+                    AccountWebViewPane.InventoryRequestStatus.ReloadRequired => InventoryRefreshKind.ReloadRequired,
+                    _ => InventoryRefreshKind.Failed
+                };
                 if (!succeeded)
                 {
                     failures.Add(reloadRequired
                         ? $"{pane.AccountName}: outcome unknown; Reload required to recover safely"
-                        : $"{pane.AccountName}: incomplete, unavailable or interrupted");
+                        : kind == InventoryRefreshKind.Partial
+                            ? $"{pane.AccountName}: partial read; completeness not proven, Connect disabled"
+                            : kind == InventoryRefreshKind.Unavailable
+                                ? $"{pane.AccountName}: inventory unavailable; inspect the current page layout"
+                                : $"{pane.AccountName}: read failed or interrupted");
                 }
             }
             catch (Exception ex)
@@ -169,7 +182,7 @@ internal sealed class AccountBrowserWindow : Window
             {
                 pane.InventoryProgressChanged -= OnProgress;
                 if (!_closed && ReferenceEquals(targetWindow, _unifiedWindow))
-                    targetWindow?.CompleteAccountRefresh(pane.AccountId, pane.AccountName, succeeded, reloadRequired);
+                    targetWindow?.CompleteAccountRefresh(pane.AccountId, pane.AccountName, succeeded, reloadRequired, kind);
             }
         }));
 
