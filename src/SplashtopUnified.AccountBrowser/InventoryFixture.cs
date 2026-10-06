@@ -53,8 +53,8 @@ internal static class InventoryFixture
         return "<!doctype html><html><head><meta charset='utf-8'><title>Computers</title></head><body>" +
             "<table id='computers'><thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table>" +
-            "<div id='pager'><button id='prev' aria-label='Previous page'>Previous</button>" +
-            "<span id='range'></span><button id='next' aria-label='Next page'>Next</button></div>" +
+            "<nav id='pager' aria-label='pagination'><button id='prev' aria-label='Previous page'>Previous</button>" +
+            "<span id='range'></span><button id='next' aria-label='Next page'>Next</button></nav>" +
             "<script>" +
             "var all=[" + string.Join(",", rows) + "];var size=3;var page=0;" +
             "function render(){var slice=all.slice(page*size,page*size+size);" +

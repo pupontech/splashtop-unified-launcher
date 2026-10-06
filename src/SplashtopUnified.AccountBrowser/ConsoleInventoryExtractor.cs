@@ -120,11 +120,11 @@ internal static class ConsoleInventoryExtractor
           return matches.length === 1 ? matches[0] : null;
         };
 
-        var safeAction = function (element) {
+        var safeAction = function (element, allowDisabled) {
           var tag = element.tagName.toLowerCase();
           var role = (element.getAttribute('role') || '').toLowerCase();
           if (tag !== 'button' && role !== 'button' && tag !== 'a') { return false; }
-          if (element.disabled || element.hasAttribute('disabled') || element.getAttribute('aria-disabled') === 'true') { return false; }
+          if (!allowDisabled && (element.disabled || element.hasAttribute('disabled') || element.getAttribute('aria-disabled') === 'true')) { return false; }
           if (tag === 'a') {
             try {
               var targetUrl = new URL(element.href, location.href);
@@ -247,7 +247,7 @@ internal static class ConsoleInventoryExtractor
         };
         var pagerActions = function (container, names) {
           return Array.prototype.slice.call(container.querySelectorAll('button,[role=button],a'))
-            .filter(function (node) { return safeAction(node) && names.indexOf(accessibleName(node).toLowerCase()) !== -1; });
+            .filter(function (node) { return safeAction(node, true) && names.indexOf(accessibleName(node).toLowerCase()) !== -1; });
         };
         var findVerifiedPager = function (grid) {
           var navs = Array.prototype.slice.call(document.querySelectorAll('nav[aria-label],[role=navigation][aria-label]'))
