@@ -426,8 +426,21 @@ internal static class BrowserSmokeTest
             "A short viewport uses overlapping steps and retains the final unique row", shortViewport);
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/slow-repaint.html", TimeSpan.FromSeconds(20));
-        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24),
-            "a slow repaint to stop as an incomplete read", TimeSpan.FromSeconds(15));
+        try
+        {
+            await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24),
+                "a slow repaint to stop as an incomplete read", TimeSpan.FromSeconds(15));
+        }
+        catch (TimeoutException)
+        {
+            // Only this local synthetic fixture is inspected. No row contents or URL payload.
+            var counters = await pane.ExecuteScriptAsync("JSON.stringify({ready:document.readyState,rowCount:document.querySelectorAll('#rows tr').length,activeWalk:!!window.__splashtopInventoryWalkActive})");
+            Console.Error.WriteLine("SYNTHETIC_SLOW_REPAINT_COUNTERS=" + counters);
+            var latest = snapshots.LastOrDefault();
+            if (latest is not null)
+                Console.Error.WriteLine($"SYNTHETIC_LATEST_READ=outcome:{latest.Outcome},rows:{latest.Rows.Count},total:{latest.ReportedTotal},mode:{latest.Mode}");
+            throw;
+        }
         var slowRepaint = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.ReportedTotal == 24 && item.Rows.Count < 24);
         RequireVirtual(slowRepaint.Outcome == InventoryOutcome.Incomplete && slowRepaint.Mode == "scrolled" &&
                 slowRepaint.ReportedTotal == 24 && slowRepaint.Rows.Count < 24,

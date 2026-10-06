@@ -186,7 +186,10 @@ internal static class InventoryFixture
             .ToArray();
         var render = "function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;" +
                      "var slice=all.slice(start,start+count);var apply=function(){document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style=\"height:'+RH+'px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px)';};" +
-                     (repaintDelayMillis == 0 ? "apply();}" : $"setTimeout(apply,{repaintDelayMillis});}}");
+                     // Delay scroll repaints, not initial hydration: the regression isolates
+                     // a renderer exceeding the per-step budget after a populated first window.
+                     (repaintDelayMillis == 0 ? "apply();}" :
+                         "if(initialRender){initialRender=false;apply();}else{setTimeout(apply," + repaintDelayMillis + ");}}");
 
         return "<!doctype html><html><head><meta charset='utf-8'><title>" + title + "</title>" +
             "<style>tr{height:" + rowHeight + "px}</style></head><body>" +
@@ -196,7 +199,7 @@ internal static class InventoryFixture
             "<thead><tr><th>Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th></th></tr></thead>" +
             "<tbody id='rows'></tbody></table></div></div>" +
             "<p role='status'>" + total + " computers</p>" +
-            "<script>var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
+            "<script>var initialRender=true;var all=[" + string.Join(",", rows) + "];var RH=" + rowHeight + ";var VH=" + viewport + ";" +
             "var scroller=document.getElementById('scroller');var table=document.getElementById('computers');" +
             render + "scroller.addEventListener('scroll',render);render();</script></body></html>";
     }
