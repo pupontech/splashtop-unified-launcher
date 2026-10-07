@@ -1,6 +1,6 @@
 # Phase 5 validation report (not yet complete)
 
-**Status:** BLOCKED before Phase 1. This file is a template plus research that is available without the owner's Windows client/session. It is not the requested Phase 5 report and is not evidence of live validation. Fill all fields from actual tests before the Phase 5 checkpoint; retain `Not tested` instead of guessing.
+**Historical validation template:** live Phase 5 acceptance remains unrecorded here. This template is not evidence of live validation and its original phase dependencies are not a current implementation ban: `PROTOTYPE-AUTHORIZATION.md` superseded those coding gates. Current synthetic Windows build/runtime evidence and owner acceptance are tracked separately through the roadmap and prototype acceptance checklist. Retain `Not tested` instead of guessing.
 
 ## Environment
 
@@ -23,7 +23,7 @@
 | Direct URI result — Account A | Not tested; Phase 1 awaits owner-selected known machine and Windows test |
 | Direct URI result — Account B / both client accounts | Not tested; Phase 2 awaits Phase 1 |
 | Same-email / multi-team result | Not applicable or not tested; determine account/team arrangement in Phase 2 |
-| WebView2 dual-login, restart persistence, MFA/new-device verification | Not tested; Phase 3 proof app not built |
+| WebView2 dual-login, restart persistence, MFA/new-device verification | Owner live validation not recorded; synthetic browser runtime proof does not establish real-account sign-in |
 | Computer-list discovery method and completeness (parsed vs console total) | Not tested; Phase 4 |
 | MAC extractable? From where? | Not tested; Phase 5 |
 | `st-business:` URI present in page DOM? | Not tested; Phase 5 |
@@ -50,7 +50,7 @@
 2. **MAC collisions and reinstall orphans:** MAC is not identity. Use `(AccountId, SplashtopComputerId)` for records and web fallback for shared MACs unless the current direct URI is proven to select the correct record.
 3. **Fragile SPA and completeness:** a visible first page is insufficient. Compare to console totals and preserve the last good cache on partial/parser failures.
 4. **Compliance:** the current Terms do not expressly authorize automated collection. Obtain written guidance before recurring synchronization.
-5. **Implementation gate:** after this report is delivered, stop. Phase 6 requires explicit owner approval.
+5. **Historical implementation gate:** the original Phase 6 approval sequence below is retained as history. It does not block the owner-authorized prototype work; see `PROTOTYPE-AUTHORIZATION.md`. Owner live acceptance remains pending.
 
 ## Approval
 

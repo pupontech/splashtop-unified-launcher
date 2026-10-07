@@ -260,7 +260,8 @@ function Invoke-AccountBrowserSmokeTest {
         'changedReorderedIdentityRefused',
         'nestedRowsExcludedFromConnect',
         'nestedScrollOwnershipReconciled',
-        'statusChangesDoNotDuplicateRows'
+        'statusChangesDoNotDuplicateRows',
+        'boundedInspectionSurveyRecognized'
     )
     foreach ($check in $requiredHeaderChecks) {
         if ($runtimeResult.inventory.$check -ne $true) {

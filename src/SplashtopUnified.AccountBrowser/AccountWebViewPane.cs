@@ -21,6 +21,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private ConsolePageKind _reportedPageKind = ConsolePageKind.Unknown;
     private readonly object _inventorySync = new();
     private readonly InventoryRequestLifecycle<InventoryRequest> _inventoryRequestLifecycle = new();
+    private readonly ConsoleInspection _consoleInspection = new();
     private IReadOnlyList<ExtractedComputerRow> _lastExtractedRows = [];
     private string? _lastRowsDocumentSource;
     private int _lastRowsGeneration = -1;
@@ -35,15 +36,6 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     private sealed record InventoryRequestAttempt(ConsoleInventoryRead? Read, bool ReloadRequired);
-
-    internal enum InventoryRequestStatus
-    {
-        Complete,
-        Failed,
-        ReloadRequired,
-        Partial,
-        Unavailable
-    }
 
     public AccountWebViewPane(
         Action<string> status,
@@ -433,26 +425,29 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     /// <summary>Returns an aggregate structural survey with no page-derived labels or samples.</summary>
     public async Task<string> InspectConsoleAsync()
     {
-        if (_webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
+        if (_disposed || _webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
         {
-            return "{}";
+            return "Inspection unavailable: open this account's official console first.";
         }
 
         var source = core.Source;
-        var raw = await core.ExecuteScriptAsync(ConsoleInventoryExtractor.DiagnosticsScript);
-        if (!string.Equals(source, core.Source, StringComparison.Ordinal) || !IsOfficialConsoleOrigin(core.Source))
+        var generation = _inventoryGeneration;
+        var result = await _consoleInspection.ReadAsync(async () =>
         {
-            return "{}";
-        }
+            var raw = await core.ExecuteScriptAsync(ConsoleInventoryExtractor.DiagnosticsScript);
+            return JsonSerializer.Deserialize<string>(raw) ?? throw new JsonException();
+        }, () => !_disposed && generation == _inventoryGeneration &&
+            string.Equals(source, core.Source, StringComparison.Ordinal) && IsOfficialConsoleOrigin(core.Source),
+            TimeSpan.FromSeconds(8));
 
-        try
+        return result.Status switch
         {
-            return JsonSerializer.Deserialize<string>(raw) ?? "{}";
-        }
-        catch (JsonException)
-        {
-            return "{}";
-        }
+            ConsoleInspectionStatus.Complete => result.Survey ?? "{}",
+            ConsoleInspectionStatus.TimedOut => "Inspection timed out. The other account can still be inspected. Wait for this read to finish or reopen the account browser before retrying.",
+            ConsoleInspectionStatus.Busy => "Inspection still pending for this account; no additional read was started.",
+            ConsoleInspectionStatus.PageChanged => "Inspection discarded: this account navigated or closed during the read. Inspect the current console again.",
+            _ => "Inspection failed. No page or exception details were included; reopen this account's console and retry."
+        };
     }
 
     /// <summary>
@@ -507,18 +502,11 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     /// <summary>Asks the owning console page for a fresh read of its computer list.</summary>
-    public async Task<InventoryRequestStatus> RequestInventoryAsync()
+    public async Task<InventoryRefreshKind> RequestInventoryAsync()
     {
         var generation = _inventoryGeneration;
         var attempt = await StartInventoryRequestAsync(generation, joinMatchingActive: true);
-        return InventoryRefreshClassification.Classify(attempt.Read?.Outcome, attempt.Read?.PageKind, attempt.ReloadRequired) switch
-        {
-            InventoryRefreshKind.Complete => InventoryRequestStatus.Complete,
-            InventoryRefreshKind.Partial => InventoryRequestStatus.Partial,
-            InventoryRefreshKind.Unavailable => InventoryRequestStatus.Unavailable,
-            InventoryRefreshKind.ReloadRequired => InventoryRequestStatus.ReloadRequired,
-            _ => InventoryRequestStatus.Failed
-        };
+        return InventoryRefreshClassification.Classify(attempt.Read?.Outcome, attempt.Read?.PageKind, attempt.ReloadRequired);
     }
 
     /// <summary>Captures selected row identity plus the exact document and extraction generation.</summary>

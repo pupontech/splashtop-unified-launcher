@@ -40,6 +40,7 @@ The research report records unresolved legal/compliance considerations, not clea
 
 Earlier specification and roadmap documents include planned architecture and historical gates; they are not evidence that every planned feature shipped.
 
+- [Focused prototype improvement scope and shared terms](docs/IMPROVEMENT-SCOPE.md)
 - [Project specification](docs/PROJECT-SPEC.md)
 - [Research and ToS review](docs/RESEARCH-2026-10-04.md)
 - [Roadmap](docs/ROADMAP.md)

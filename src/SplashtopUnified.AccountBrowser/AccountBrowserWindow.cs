@@ -147,25 +147,13 @@ internal sealed class AccountBrowserWindow : Window
                     targetWindow?.UpdateRefresh(pane.AccountId, pane.AccountName, progress);
             }
             pane.InventoryProgressChanged += OnProgress;
-            var succeeded = false;
-            var reloadRequired = false;
             var kind = InventoryRefreshKind.Failed;
             try
             {
-                var result = await pane.RequestInventoryAsync();
-                succeeded = result == AccountWebViewPane.InventoryRequestStatus.Complete;
-                reloadRequired = result == AccountWebViewPane.InventoryRequestStatus.ReloadRequired;
-                kind = result switch
+                kind = await pane.RequestInventoryAsync();
+                if (kind != InventoryRefreshKind.Complete)
                 {
-                    AccountWebViewPane.InventoryRequestStatus.Complete => InventoryRefreshKind.Complete,
-                    AccountWebViewPane.InventoryRequestStatus.Partial => InventoryRefreshKind.Partial,
-                    AccountWebViewPane.InventoryRequestStatus.Unavailable => InventoryRefreshKind.Unavailable,
-                    AccountWebViewPane.InventoryRequestStatus.ReloadRequired => InventoryRefreshKind.ReloadRequired,
-                    _ => InventoryRefreshKind.Failed
-                };
-                if (!succeeded)
-                {
-                    failures.Add(reloadRequired
+                    failures.Add(kind == InventoryRefreshKind.ReloadRequired
                         ? $"{pane.AccountName}: outcome unknown; Reload required to recover safely"
                         : kind == InventoryRefreshKind.Partial
                             ? $"{pane.AccountName}: partial read; completeness not proven, Connect disabled"
@@ -182,7 +170,7 @@ internal sealed class AccountBrowserWindow : Window
             {
                 pane.InventoryProgressChanged -= OnProgress;
                 if (!_closed && ReferenceEquals(targetWindow, _unifiedWindow))
-                    targetWindow?.CompleteAccountRefresh(pane.AccountId, pane.AccountName, succeeded, reloadRequired, kind);
+                    targetWindow?.CompleteAccountRefresh(pane.AccountId, pane.AccountName, kind);
             }
         }));
 
@@ -319,18 +307,23 @@ internal sealed class AccountBrowserWindow : Window
         builder.AppendLine("Read-only console survey. Counts and labels only; no row data, cookies or tokens.");
         builder.AppendLine("Send this back if the merged list is missing computers.");
         builder.AppendLine();
-        foreach (var pane in _panes.ToList())
+        var panes = _panes.ToList();
+        var surveys = await Task.WhenAll(panes.Select(async pane =>
         {
-            builder.AppendLine("=== " + (string.IsNullOrEmpty(pane.AccountName) ? "(unnamed account)" : pane.AccountName) + " ===");
             try
             {
-                builder.AppendLine(await pane.InspectConsoleAsync());
+                return await pane.InspectConsoleAsync();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                builder.AppendLine("inspection failed: " + ex.Message);
+                return "Inspection failed. No page or exception details were included.";
             }
-
+        }));
+        for (var index = 0; index < panes.Count; index++)
+        {
+            var pane = panes[index];
+            builder.AppendLine("=== " + (string.IsNullOrEmpty(pane.AccountName) ? "(unnamed account)" : pane.AccountName) + " ===");
+            builder.AppendLine(surveys[index]);
             builder.AppendLine();
         }
 

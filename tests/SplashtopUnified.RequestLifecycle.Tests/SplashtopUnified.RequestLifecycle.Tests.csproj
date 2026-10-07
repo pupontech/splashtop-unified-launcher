@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryRequestLifecycle.cs" Link="InventoryRequestLifecycle.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInspection.cs" Link="ConsoleInspection.cs" />
   </ItemGroup>
 </Project>

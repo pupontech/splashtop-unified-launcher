@@ -512,6 +512,13 @@ internal static class BrowserSmokeTest
         Require(nestedScroll.Rows.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() == 48,
             "Each computer appears exactly once despite status and Connect changes between scroll steps");
 
+        var inspection = await pane.InspectConsoleAsync();
+        using var inspectionDocument = JsonDocument.Parse(inspection);
+        var inspectionRecognized = inspectionDocument.RootElement.GetProperty("tableSchemas").GetArrayLength() == 1;
+        Require(inspectionRecognized, "The bounded inspection adapter returns the recognized synthetic table survey");
+        Require(!inspection.Contains("Fixture Node", StringComparison.Ordinal),
+            "Inspection reports structure without computer row data");
+
         var beforeAmbiguous = snapshots.Count;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/ambiguous-headers.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Skip(beforeAmbiguous).Any(item => item.PageKind == ConsolePageKind.Unknown && item.Outcome == InventoryOutcome.Unavailable),
@@ -564,6 +571,7 @@ internal static class BrowserSmokeTest
             reorderedConnectMappedUnique = reorderedRow.HasConnectControl && reorderedClickCount.Trim() == "1",
             changedReorderedIdentityRefused = true,
             nestedRowsExcludedFromConnect = nested.Rows.Count == 2 && nestedClickCount.Trim() == "1",
+            boundedInspectionSurveyRecognized = inspectionRecognized && !inspection.Contains("Fixture Node", StringComparison.Ordinal),
             nestedScrollOwnershipReconciled = nestedScroll.Rows.Count == 48 && nestedScroll.ReportedTotal == 48 && nestedScroll.Outcome == InventoryOutcome.Complete && nestedScroll.Mode == "scrolled",
             statusChangesDoNotDuplicateRows = nestedScroll.Rows.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() == 48,
             capturedRows = read.Rows.Count,
