@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInventoryExtractor.cs" Link="ConsoleInventoryExtractor.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventorySnapshot.cs" Link="InventorySnapshot.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryRefreshClassification.cs" Link="InventoryRefreshClassification.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryRefreshProgress.cs" Link="InventoryRefreshProgress.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConnectionChooser.cs" Link="ConnectionChooser.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInventoryActions.cs" Link="ConsoleInventoryActions.cs" />
+  </ItemGroup>
+
+</Project>

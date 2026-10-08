@@ -1,0 +1,105 @@
+name: Account Browser Windows runtime CI and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-account-browser:
+    name: Windows x64 WebView2 isolation smoke test and portable ZIP
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v7.0.1 — verified release commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-dotnet v6.0.0 — verified release commit SHA.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Require the real Account Browser project
+        shell: pwsh
+        run: |
+          $project = 'src/SplashtopUnified.AccountBrowser/SplashtopUnified.AccountBrowser.csproj'
+          if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
+            throw "Required Account Browser project is missing: $project. CI will not substitute a stub or another app."
+          }
+
+      - name: Install and verify official WebView2 Evergreen Runtime
+        shell: pwsh
+        run: |
+          $bootstrapper = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebView2Setup.exe'
+          $bootstrapperUri = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+          Invoke-WebRequest -Uri $bootstrapperUri -OutFile $bootstrapper
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapper
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $signature.SignerCertificate -or
+              $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+            throw 'The downloaded WebView2 Evergreen Bootstrapper does not have a valid Microsoft Corporation signature.'
+          }
+
+          $installer = Start-Process -FilePath $bootstrapper -ArgumentList @('/silent', '/install') -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "Official WebView2 Evergreen installation failed with exit code $($installer.ExitCode)."
+          }
+
+          $clientId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $registryPaths = @(
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$clientId",
+            "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$clientId"
+          )
+          $versions = @(
+            foreach ($registryPath in $registryPaths) {
+              if (Test-Path -LiteralPath $registryPath) {
+                $property = Get-ItemProperty -LiteralPath $registryPath -Name pv -ErrorAction SilentlyContinue
+                $version = [version]'0.0'
+                if ($null -ne $property -and
+                    [version]::TryParse([string]$property.pv, [ref]$version) -and
+                    $version -gt [version]'0.0.0.0') {
+                  [pscustomobject]@{ Version = $version.ToString(); RegistryPath = $registryPath }
+                }
+              }
+            }
+          ) | Sort-Object { [version]$_.Version } -Descending
+          if ($versions.Count -eq 0) {
+            throw 'The official installer completed, but Microsoft WebView2 Evergreen Runtime is not registered.'
+          }
+          Write-Host "Verified WebView2 Evergreen Runtime $($versions[0].Version) at $($versions[0].RegistryPath)."
+
+      - name: Test handoff, extraction, and cache policies
+        shell: pwsh
+        run: |
+          dotnet test tests/SplashtopUnified.BusinessHandoff.Tests/SplashtopUnified.BusinessHandoff.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.NativePreference.Tests/SplashtopUnified.NativePreference.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.Extractor.Tests/SplashtopUnified.Extractor.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.Cache.Tests/SplashtopUnified.Cache.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/SplashtopUnified.RequestLifecycle.Tests/SplashtopUnified.RequestLifecycle.Tests.csproj --configuration Release --verbosity normal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish, run two isolated real-runtime smoke tests, and package
+        shell: pwsh
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: ./scripts/Build-AccountBrowser.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -SourceCommit $env:SOURCE_COMMIT -Configuration Release -RuntimeIdentifier win-x64 -SmokeTestTimeoutSeconds 90
+
+      # actions/upload-artifact v4.6.2 — verified signed release commit SHA.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: account-browser-win-x64-${{ github.sha }}
+          path: |
+            artifacts/account-browser/SplashtopUnified-AccountBrowser-win-x64.zip
+            artifacts/account-browser/runtime-evidence.json
+          if-no-files-found: error
+          retention-days: 14
