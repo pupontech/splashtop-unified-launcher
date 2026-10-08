@@ -339,7 +339,9 @@ internal static class BrowserSmokeTest
             "The host Connect method refuses to execute on an untrusted top-level origin");
         Require(await pane.ProbeChooserAsync() is null && await pane.SelectChooserOptionAsync(ConnectionChooser.NativeKey) == "blocked-origin",
             "The host chooser methods refuse an untrusted top-level origin");
-        Require(await pane.InspectConsoleAsync() == "{}", "Diagnostics refuse an untrusted top-level origin");
+        var untrustedInspection = await pane.InspectConsoleAsync();
+        Require(untrustedInspection == "Inspection unavailable: open this account's official console first.",
+            "Diagnostics return the fixed refusal for an untrusted top-level origin");
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/login.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.Login), "the sign-in fixture to be recognised");
