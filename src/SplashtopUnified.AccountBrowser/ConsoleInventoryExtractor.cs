@@ -167,35 +167,13 @@ internal static class ConsoleInventoryExtractor
           // observations, not row identity, and must not create extra computer records.
           return JSON.stringify([record.name, record.deviceName, record.group, record.notes]);
         };
-        var rememberScrollPositions = function (grid, columnMap, scroller, positions) {
-          var nodes = rowElements(grid, columnMap);
-          var scrollerTop = scroller.getBoundingClientRect().top;
-          var ambiguous = false;
-          for (var i = 0; i < nodes.length; i++) {
-            var cells = grid.tagName === 'TABLE'
-              ? nodes[i].querySelectorAll(':scope > td')
-              : nodes[i].querySelectorAll('[role=gridcell],[role=cell],td');
-            var record = {
-              name: clean(cells[columnMap.name] ? cells[columnMap.name].textContent : '', 512),
-              deviceName: clean(cells[columnMap.deviceName] ? cells[columnMap.deviceName].textContent : '', 512),
-              group: clean(cells[columnMap.group] ? cells[columnMap.group].textContent : '', 512),
-              notes: columnMap.notes === null ? '' : clean(cells[columnMap.notes] ? cells[columnMap.notes].textContent : '', 512)
-            };
-            if (!record.name) { continue; }
-            var key = recordKey(record);
-            var rect = nodes[i].getBoundingClientRect();
-            var absoluteTop = rect.top - scrollerTop + scroller.scrollTop;
-            if (!isFinite(absoluteTop)) { ambiguous = true; continue; }
-            if (Object.prototype.hasOwnProperty.call(positions, key)) {
-              // Virtualized tables can have per-window layout drift relative to their spacer.
-              // Allow at most half a viewport; a distant recurrence still fails closed.
-              if (Math.abs(positions[key] - absoluteTop) > Math.max(32, scroller.clientHeight * 0.5)) { ambiguous = true; }
-            }
-            positions[key] = absoluteTop;
-          }
-          return ambiguous;
+        var postInventoryProgress = function (rowsRead) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            source: 'splashtop-inventory-progress', version: 1, requestId: requestId,
+            rowsRead: rowsRead, total: reportedTotal == null ? null : reportedTotal
+          }));
         };
-        var collect = function (grid, columnMap, seen, rows, preserveMultiplicity) {
+        var collect = function (grid, columnMap, seen, rows, preserveMultiplicity, suppressProgress) {
           var nodes = rowElements(grid, columnMap);
           var sampleCounts = Object.create(null);
           var sampleRecords = [];
@@ -250,11 +228,78 @@ internal static class ConsoleInventoryExtractor
               seen[key] = Math.max(seen[key] || 0, sampleCounts[key]);
             });
           }
-          window.chrome.webview.postMessage(JSON.stringify({
-            source: 'splashtop-inventory-progress', version: 1, requestId: requestId,
-            rowsRead: rows.length, total: reportedTotal == null ? null : reportedTotal
-          }));
-          return nodes.length;
+          if (!suppressProgress) { postInventoryProgress(rows.length); }
+          return sampleRecords;
+        };
+
+        var makeScrollWindow = function (records, scroller) {
+          var nodes = rowElements(grid, columnMap);
+          var minimumRowHeight = Infinity;
+          for (var i = 0; i < nodes.length; i++) {
+            var height = nodes[i].getBoundingClientRect().height;
+            if (height > 0 && height < minimumRowHeight) { minimumRowHeight = height; }
+          }
+          return { records: records, scrollTop: scroller.scrollTop, minimumRowHeight: isFinite(minimumRowHeight) ? minimumRowHeight : 0 };
+        };
+        var appendInitialScrollWindow = function (windowRecords, rows, seen) {
+          for (var i = 0; i < windowRecords.length && rows.length < MAX_ROWS; i++) {
+            var record = windowRecords[i];
+            var key = recordKey(record);
+            seen[key] = (seen[key] || 0) + 1;
+            if (seen[key] > 1) { virtualDuplicateAmbiguity = true; }
+            rows.push(record);
+          }
+          postInventoryProgress(rows.length);
+        };
+        var findUniqueWindowOverlap = function (previousWindow, currentWindow) {
+          var previous = previousWindow.records;
+          var current = currentWindow.records;
+          if (previous.length === current.length &&
+              Math.abs(currentWindow.scrollTop - previousWindow.scrollTop) <= currentWindow.minimumRowHeight + 2) {
+            var identical = true;
+            for (var sameIndex = 0; sameIndex < current.length; sameIndex++) {
+              if (recordKey(previous[sameIndex]) !== recordKey(current[sameIndex])) { identical = false; break; }
+            }
+            if (identical) { return current.length; }
+          }
+          var maximum = Math.min(previous.length, current.length);
+          var overlap = 0;
+          var matches = 0;
+          for (var length = 1; length <= maximum; length++) {
+            var matchesAtLength = true;
+            for (var i = 0; i < length; i++) {
+              if (recordKey(previous[previous.length - length + i]) !== recordKey(current[i])) {
+                matchesAtLength = false;
+                break;
+              }
+            }
+            if (matchesAtLength) { overlap = length; matches++; }
+          }
+          if (matches !== 1 || overlap === 0) { return 0; }
+          if (overlap === current.length && Math.abs(currentWindow.scrollTop - previousWindow.scrollTop) > currentWindow.minimumRowHeight + 2) {
+            return 0;
+          }
+          return overlap;
+        };
+        var mergeScrollWindow = function (previousWindow, currentWindow, rows, seen) {
+          var overlap = findUniqueWindowOverlap(previousWindow, currentWindow);
+          if (overlap === 0) {
+            virtualDuplicateAmbiguity = true;
+            postInventoryProgress(rows.length);
+            return false;
+          }
+          for (var i = overlap; i < currentWindow.records.length && rows.length < MAX_ROWS; i++) {
+            var record = currentWindow.records[i];
+            var key = recordKey(record);
+            if (seen[key]) {
+              virtualDuplicateAmbiguity = true;
+              continue;
+            }
+            seen[key] = 1;
+            rows.push(record);
+          }
+          postInventoryProgress(rows.length);
+          return true;
         };
 
         // A cheap fingerprint of what is currently rendered. Used to detect that a page or
@@ -466,7 +511,8 @@ internal static class ConsoleInventoryExtractor
             // Do not move any container when an explicit total already reconciles.
             if (reportedTotal === null || rows.length !== reportedTotal) {
               var scroller = null;
-              var scrolledPositions = Object.create(null);
+              var previousWindow = null;
+              var scrollSequenceValid = true;
               for (var candidateIndex = 0; candidateIndex < Math.min(relevant.length, 6); candidateIndex++) {
                 if (now() >= walkDeadline) { break; }
                 var candidate = relevant[candidateIndex];
@@ -476,19 +522,20 @@ internal static class ConsoleInventoryExtractor
                 if (stepSize <= 0) { continue; }
                 try {
                   if (initialTop !== 0) { await waitForScrollPaint(candidate, 0, 1000); }
-                  var candidateRows = [], candidateSeen = Object.create(null);
-                  var candidatePositions = Object.create(null);
-                  var candidatePositionsAmbiguous = rememberScrollPositions(grid, columnMap, candidate, candidatePositions);
-                  collect(grid, columnMap, candidateSeen, candidateRows, false);
+                  var candidateFirstScratch = [], candidateFirstSeen = Object.create(null);
+                  var candidateFirstRecords = collect(grid, columnMap, candidateFirstSeen, candidateFirstScratch, false, true);
+                  var candidateFirstWindow = makeScrollWindow(candidateFirstRecords, candidate);
                   var probeTop = Math.min(stepSize, Math.max(0, candidate.scrollHeight - viewport));
                   if (probeTop > 0 && await waitForScrollPaint(candidate, probeTop, 1000) && candidate.scrollTop > 0) {
-                    collect(grid, columnMap, candidateSeen, candidateRows, false);
-                    candidatePositionsAmbiguous = rememberScrollPositions(grid, columnMap, candidate, candidatePositions) || candidatePositionsAmbiguous;
+                    var candidateProbeScratch = [], candidateProbeSeen = Object.create(null);
+                    var candidateProbeRecords = collect(grid, columnMap, candidateProbeSeen, candidateProbeScratch, false, true);
+                    var candidateProbeWindow = makeScrollWindow(candidateProbeRecords, candidate);
                     scroller = candidate;
-                    rows = candidateRows;
-                    seen = candidateSeen;
-                    scrolledPositions = candidatePositions;
-                    virtualDuplicateAmbiguity = virtualDuplicateAmbiguity || candidatePositionsAmbiguous;
+                    rows = [];
+                    seen = Object.create(null);
+                    appendInitialScrollWindow(candidateFirstRecords, rows, seen);
+                    scrollSequenceValid = mergeScrollWindow(candidateFirstWindow, candidateProbeWindow, rows, seen);
+                    previousWindow = candidateProbeWindow;
                     break;
                   }
                 } finally {
@@ -502,7 +549,7 @@ internal static class ConsoleInventoryExtractor
                 try {
                   var viewport = scroller.clientHeight;
                   var stepSize = Math.min(Math.floor(viewport * 0.8), viewport - 1);
-                  for (var step = 0; step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
+                  for (var step = 0; scrollSequenceValid && step < MAX_STEPS && rows.length < MAX_ROWS; step++) {
                     if (reportedTotal !== null && rows.length === reportedTotal) { break; }
                     if (now() >= walkDeadline) { break; }
                     var previousTop = scroller.scrollTop;
@@ -513,18 +560,28 @@ internal static class ConsoleInventoryExtractor
                         walkedToEnd = true;
                         break;
                       }
-                      collect(grid, columnMap, seen, rows, false);
-                      virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
+                      var stationaryScratch = [], stationarySeen = Object.create(null);
+                      var stationaryRecords = collect(grid, columnMap, stationarySeen, stationaryScratch, false, true);
+                      var stationaryWindow = makeScrollWindow(stationaryRecords, scroller);
+                      scrollSequenceValid = mergeScrollWindow(previousWindow, stationaryWindow, rows, seen);
+                      previousWindow = stationaryWindow;
                       continue;
                     }
                     if (!await waitForScrollPaint(scroller, targetTop, 1000)) { break; }
-                    collect(grid, columnMap, seen, rows, false);
-                    virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
+                    var currentScratch = [], currentSeen = Object.create(null);
+                    var currentRecords = collect(grid, columnMap, currentSeen, currentScratch, false, true);
+                    var currentWindow = makeScrollWindow(currentRecords, scroller);
+                    scrollSequenceValid = mergeScrollWindow(previousWindow, currentWindow, rows, seen);
+                    previousWindow = currentWindow;
+                    if (!scrollSequenceValid) { break; }
                     if (reportedTotal !== null && rows.length === reportedTotal) { break; }
                     if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) {
                       if (await hasStableScrollEnd(scroller, viewport)) { walkedToEnd = true; break; }
-                      collect(grid, columnMap, seen, rows, false);
-                      virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
+                      var updatedScratch = [], updatedSeen = Object.create(null);
+                      var updatedRecords = collect(grid, columnMap, updatedSeen, updatedScratch, false, true);
+                      var updatedWindow = makeScrollWindow(updatedRecords, scroller);
+                      scrollSequenceValid = mergeScrollWindow(previousWindow, updatedWindow, rows, seen);
+                      previousWindow = updatedWindow;
                     }
                   }
                 } finally {

@@ -19,7 +19,7 @@ Only published release assets are testing downloads; a pushed candidate is not a
 
 - Two isolated account browser profiles with engine-managed password saving/autofill enabled; the host does not extract or export passwords, cookies or tokens.
 - Native searchable unified inventory with account labels, rendered status indicators and last-read metadata.
-- Bounded pagination and virtual-scroll extraction. A no-total scroll list is complete only after it reaches the physical bottom and remains stable for two quiet 250ms intervals; indistinguishable row identities at different content positions remain incomplete. Duplicate rows across verified pages are retained.
+- Bounded pagination and virtual-scroll extraction. A no-total scroll list is complete only after it reaches the physical bottom and remains stable for two quiet 250ms intervals, with every adjacent viewport joined by one unambiguous ordered overlap. Repeated identities outside the verified overlap or missing/ambiguous overlap remain incomplete. Duplicate rows across verified pages are retained.
 - Parallel per-account refresh and request-correlated progress. A manual Refresh joins the exact matching automatic read; an unknown timeout requires Reload rather than starting overlapping work.
 - Foreground connection prompts, immutable selected-row checks and fail-closed trusted-origin/protocol handling. Cached, stale, partial or failed inventory cannot authorize unified connections.
 - Allowlisted local JSON inventory cache for historical display, not SQLite and not connection authority. Inventory names/groups remain plaintext metadata and may be sensitive; Notes and free-form diagnostics are not persisted.

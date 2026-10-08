@@ -17,7 +17,7 @@ This is a Windows WPF/WebView2 testing prototype for a unified computer list fro
 
 Status is collected only from supported semantic indicators actually rendered by a row. Missing indicators stay unknown; color alone is not interpreted. Cached/last-read status is historical, not live, and this application does not monitor device status in the background. A complete current read is still only a snapshot of the console. Refresh manually to read again.
 
-The extractor is deliberately conservative: it uses visible column labels, verified paging or a structurally verified virtual-scroll container, and bounded walks. A no-total scroll walk is complete only after reaching the physical bottom and observing two quiet 250ms intervals with no DOM mutation or scroll-height growth. Rows that repeat at distinct content positions are ambiguous and remain incomplete; duplicate rows across verified pages are retained. A console total that does not reconcile, an unrecognized layout, an ambiguous identity or a failed/unfinished walk must not be treated as complete.
+The extractor is deliberately conservative: it uses visible column labels, verified paging or a structurally verified virtual-scroll container, and bounded walks. A no-total scroll walk is complete only after reaching the physical bottom and observing two quiet 250ms intervals with no DOM mutation or scroll-height growth, while every adjacent row window has one unambiguous ordered overlap. Repeated identities outside the overlap, missing/ambiguous overlap, a console total that does not reconcile, an unrecognized layout or a failed/unfinished walk must not be treated as complete. Duplicate rows across verified pages are retained.
 
 ## Owner validation required before accepting a fixed version
 
