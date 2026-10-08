@@ -187,10 +187,11 @@ internal static class ConsoleInventoryExtractor
             var absoluteTop = rect.top - scrollerTop + scroller.scrollTop;
             if (!isFinite(absoluteTop)) { ambiguous = true; continue; }
             if (Object.prototype.hasOwnProperty.call(positions, key)) {
-              if (Math.abs(positions[key] - absoluteTop) > 8) { ambiguous = true; }
-            } else {
-              positions[key] = absoluteTop;
+              // Virtualized tables can have small per-window layout drift relative to their spacer.
+              // Compare to the last view with a bounded tolerance; a distant recurrence still fails closed.
+              if (Math.abs(positions[key] - absoluteTop) > Math.max(32, scroller.clientHeight * 0.1)) { ambiguous = true; }
             }
+            positions[key] = absoluteTop;
           }
           return ambiguous;
         };
