@@ -435,13 +435,16 @@ internal static class BrowserSmokeTest
             var surveyRoot = noTotalSurvey.RootElement;
             var surveyTable = surveyRoot.GetProperty("tableSchemas")[0];
             var scrollOwner = surveyTable.GetProperty("scrollAncestors")[0];
-            Require(surveyRoot.GetProperty("tables").GetInt32() == 1 &&
-                    surveyTable.GetProperty("headerCellCount").GetInt32() == 5 &&
-                    surveyTable.GetProperty("renderedRows").GetInt32() == 16 &&
-                    scrollOwner.GetProperty("clientHeight").GetInt32() == 646 &&
-                    scrollOwner.GetProperty("scrollHeight").GetInt32() == 6014 &&
-                    surveyRoot.GetProperty("scrollContainers").GetInt32() == 2,
-                "The synthetic no-total fixture matches the owner's bounded table/scroll survey shape");
+            var tableCount = surveyRoot.GetProperty("tables").GetInt32();
+            var headerCount = surveyTable.GetProperty("headerCellCount").GetInt32();
+            var renderedRows = surveyTable.GetProperty("renderedRows").GetInt32();
+            var scrollClientHeight = scrollOwner.GetProperty("clientHeight").GetInt32();
+            var scrollHeight = scrollOwner.GetProperty("scrollHeight").GetInt32();
+            var scrollContainerCount = surveyRoot.GetProperty("scrollContainers").GetInt32();
+            var surveySummary = $"tables={tableCount}, headers={headerCount}, rows={renderedRows}, ownerClientHeight={scrollClientHeight}, ownerScrollHeight={scrollHeight}, scrollContainers={scrollContainerCount}";
+            Require(tableCount == 1 && headerCount == 5 && renderedRows == 16 &&
+                    scrollClientHeight == 646 && scrollHeight == 6014 && scrollContainerCount == 2,
+                $"The synthetic no-total fixture matches the owner's bounded table/scroll survey shape ({surveySummary})");
         }
         Require(!noTotalSurveyText.Contains("Fixture Node", StringComparison.Ordinal),
             "The structural scroll survey does not return row text");
