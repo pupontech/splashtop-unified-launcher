@@ -39,3 +39,13 @@ Three fresh Luna probes verified gpt-6-luna. Two read-only Luna reports complete
 All seven local suites pass: 241 tests, zero skipped. Release WPF cross-build: zero warnings/errors. Hosted Windows proof and package verification are recorded separately for the final commit.
 
 Optional independent Gemini concurrency consultation was unavailable because Antigravity is not authenticated. No Google credentials were requested, no dependency or profile changes were made, and this optional failure is not presented as a review pass.
+
+## Follow-up: smoke refusal alignment and v0.3.8-test
+
+The exact-commit Windows run `37599983427` on `a82ac786abd58fda7df1ca840e41e44293ac2a3e` failed at `BrowserSmokeTest.cs:342`: the synthetic untrusted-origin fixture expected `{}`, while `InspectConsoleAsync()` returned its fixed host-owned refusal message before invoking page script. This was a stale smoke expectation, not a product guard defect. The correction changed only the assertion; production origin checks were not weakened.
+
+Spec axis: the change matches `IMPROVEMENT-SCOPE.md` read-only inspection and safe-failure contracts; no scope expansion. Standards axis: no new maintainability smell or coverage gap; the exact refusal contract is asserted at the existing WebView2 smoke seam. OCR preview/rules selected one file and the full file was manually reviewed.
+
+Verified on source commit `920545196c7868907992ff83473fd6b889b9acf5`: seven local Release suites passed (241/0 failed/0 skipped), WPF build had zero warnings/errors, and push runs `37752581499`, `37752581495`, and `37752581749` passed. Release `v0.3.8-test` targets that exact commit. Its downloaded 411-member ZIP passed CRC validation; all 410 non-manifest member hashes match, the sidecar passes, and the release download matches the CI artifact at SHA-256 `a843c0ed9e9b5b7a86c775a878cd06f783929b42856044009e701939c20090f4`.
+
+These are synthetic Windows/runtime and artifact results, not owner-live acceptance. Real account sign-in/MFA, current live-console DOM compatibility, and the actual remote-session target/outcome remain owner tests.
