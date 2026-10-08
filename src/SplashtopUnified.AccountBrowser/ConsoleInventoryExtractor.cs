@@ -524,6 +524,13 @@ internal static class ConsoleInventoryExtractor
                   if (initialTop !== 0) { await waitForScrollPaint(candidate, 0, 1000); }
                   var candidateFirstScratch = [], candidateFirstSeen = Object.create(null);
                   var candidateFirstRecords = collect(grid, columnMap, candidateFirstSeen, candidateFirstScratch, false, true);
+                  if (candidateFirstRecords.length === 0) {
+                    await waitForScrollPaint(candidate, 0, 1000);
+                    candidateFirstScratch = [];
+                    candidateFirstSeen = Object.create(null);
+                    candidateFirstRecords = collect(grid, columnMap, candidateFirstSeen, candidateFirstScratch, false, true);
+                  }
+                  if (candidateFirstRecords.length === 0) { continue; }
                   var candidateFirstWindow = makeScrollWindow(candidateFirstRecords, candidate);
                   var probeTop = Math.min(stepSize, Math.max(0, candidate.scrollHeight - viewport));
                   if (probeTop > 0 && await waitForScrollPaint(candidate, probeTop, 1000) && candidate.scrollTop > 0) {
