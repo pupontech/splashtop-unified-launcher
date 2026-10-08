@@ -429,6 +429,9 @@ internal static class BrowserSmokeTest
             "The 240-row virtual walk itself stays inside its budget", large, wallMillis: largeWallMillis);
 
         await pane.NavigateAndWaitAsync(trustedOrigin + "/no-total-6014.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136),
+            "the 6014px no-total virtual list to be fully walked", TimeSpan.FromSeconds(30));
+        var noTotal6014 = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136);
         var noTotalSurveyText = await pane.InspectConsoleAsync();
         using (var noTotalSurvey = JsonDocument.Parse(noTotalSurveyText))
         {
@@ -448,9 +451,6 @@ internal static class BrowserSmokeTest
         }
         Require(!noTotalSurveyText.Contains("Fixture Node", StringComparison.Ordinal),
             "The structural scroll survey does not return row text");
-        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136),
-            "the 6014px no-total virtual list to be fully walked", TimeSpan.FromSeconds(30));
-        var noTotal6014 = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136);
         RequireVirtual(noTotal6014.Outcome == InventoryOutcome.Complete && noTotal6014.ReportedTotal is null &&
                 noTotal6014.Rows.Any(row => row.Name == "Fixture Node 136"),
             "A no-total virtual list matching the first live scroll geometry completes only after a clear end", noTotal6014);
