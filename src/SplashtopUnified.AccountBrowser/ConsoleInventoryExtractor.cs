@@ -167,6 +167,33 @@ internal static class ConsoleInventoryExtractor
           // observations, not row identity, and must not create extra computer records.
           return JSON.stringify([record.name, record.deviceName, record.group, record.notes]);
         };
+        var rememberScrollPositions = function (grid, columnMap, scroller, positions) {
+          var nodes = rowElements(grid, columnMap);
+          var scrollerTop = scroller.getBoundingClientRect().top;
+          var ambiguous = false;
+          for (var i = 0; i < nodes.length; i++) {
+            var cells = grid.tagName === 'TABLE'
+              ? nodes[i].querySelectorAll(':scope > td')
+              : nodes[i].querySelectorAll('[role=gridcell],[role=cell],td');
+            var record = {
+              name: clean(cells[columnMap.name] ? cells[columnMap.name].textContent : '', 512),
+              deviceName: clean(cells[columnMap.deviceName] ? cells[columnMap.deviceName].textContent : '', 512),
+              group: clean(cells[columnMap.group] ? cells[columnMap.group].textContent : '', 512),
+              notes: columnMap.notes === null ? '' : clean(cells[columnMap.notes] ? cells[columnMap.notes].textContent : '', 512)
+            };
+            if (!record.name) { continue; }
+            var key = recordKey(record);
+            var rect = nodes[i].getBoundingClientRect();
+            var absoluteTop = rect.top - scrollerTop + scroller.scrollTop;
+            if (!isFinite(absoluteTop)) { ambiguous = true; continue; }
+            if (Object.prototype.hasOwnProperty.call(positions, key)) {
+              if (Math.abs(positions[key] - absoluteTop) > 8) { ambiguous = true; }
+            } else {
+              positions[key] = absoluteTop;
+            }
+          }
+          return ambiguous;
+        };
         var collect = function (grid, columnMap, seen, rows, preserveMultiplicity) {
           var nodes = rowElements(grid, columnMap);
           var sampleCounts = Object.create(null);
@@ -261,6 +288,23 @@ internal static class ConsoleInventoryExtractor
           try {
             scroller.scrollTop = targetTop;
             return await waitForChange(signature, Math.min(maxMillis, Math.max(0, walkDeadline - now())), repaint);
+          } finally { observer.disconnect(); }
+        };
+        var hasStableScrollEnd = async function (scroller, viewport) {
+          var stableHeight = scroller.scrollHeight;
+          if (scroller.scrollTop + viewport < stableHeight - 8) { return false; }
+          var changed = false;
+          var observer = new MutationObserver(function () { changed = true; });
+          observer.observe(scroller, { childList: true, subtree: true, characterData: true, attributes: true });
+          try {
+            // Two quiet intervals catch a list that appends another window at its first bottom.
+            for (var quietCheck = 0; quietCheck < 2; quietCheck++) {
+              if (now() >= walkDeadline) { return false; }
+              await sleep(250);
+              if (changed || scroller.scrollHeight !== stableHeight ||
+                  scroller.scrollTop + viewport < scroller.scrollHeight - 8) { return false; }
+            }
+            return true;
           } finally { observer.disconnect(); }
         };
 
@@ -421,6 +465,7 @@ internal static class ConsoleInventoryExtractor
             // Do not move any container when an explicit total already reconciles.
             if (reportedTotal === null || rows.length !== reportedTotal) {
               var scroller = null;
+              var scrolledPositions = Object.create(null);
               for (var candidateIndex = 0; candidateIndex < Math.min(relevant.length, 6); candidateIndex++) {
                 if (now() >= walkDeadline) { break; }
                 var candidate = relevant[candidateIndex];
@@ -431,13 +476,18 @@ internal static class ConsoleInventoryExtractor
                 try {
                   if (initialTop !== 0) { await waitForScrollPaint(candidate, 0, 1000); }
                   var candidateRows = [], candidateSeen = Object.create(null);
+                  var candidatePositions = Object.create(null);
+                  var candidatePositionsAmbiguous = rememberScrollPositions(grid, columnMap, candidate, candidatePositions);
                   collect(grid, columnMap, candidateSeen, candidateRows, false);
                   var probeTop = Math.min(stepSize, Math.max(0, candidate.scrollHeight - viewport));
                   if (probeTop > 0 && await waitForScrollPaint(candidate, probeTop, 1000) && candidate.scrollTop > 0) {
                     collect(grid, columnMap, candidateSeen, candidateRows, false);
+                    candidatePositionsAmbiguous = rememberScrollPositions(grid, columnMap, candidate, candidatePositions) || candidatePositionsAmbiguous;
                     scroller = candidate;
                     rows = candidateRows;
                     seen = candidateSeen;
+                    scrolledPositions = candidatePositions;
+                    virtualDuplicateAmbiguity = virtualDuplicateAmbiguity || candidatePositionsAmbiguous;
                     break;
                   }
                 } finally {
@@ -458,13 +508,23 @@ internal static class ConsoleInventoryExtractor
                     var maxScrollTop = Math.max(0, scroller.scrollHeight - viewport);
                     var targetTop = Math.min(previousTop + stepSize, maxScrollTop);
                     if (targetTop === previousTop) {
-                      walkedToEnd = previousTop + viewport >= scroller.scrollHeight - 8;
-                      break;
+                      if (previousTop + viewport >= scroller.scrollHeight - 8 && await hasStableScrollEnd(scroller, viewport)) {
+                        walkedToEnd = true;
+                        break;
+                      }
+                      collect(grid, columnMap, seen, rows, false);
+                      virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
+                      continue;
                     }
                     if (!await waitForScrollPaint(scroller, targetTop, 1000)) { break; }
                     collect(grid, columnMap, seen, rows, false);
+                    virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
                     if (reportedTotal !== null && rows.length === reportedTotal) { break; }
-                    if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) { walkedToEnd = true; break; }
+                    if (scroller.scrollTop + viewport >= scroller.scrollHeight - 8) {
+                      if (await hasStableScrollEnd(scroller, viewport)) { walkedToEnd = true; break; }
+                      collect(grid, columnMap, seen, rows, false);
+                      virtualDuplicateAmbiguity = rememberScrollPositions(grid, columnMap, scroller, scrolledPositions) || virtualDuplicateAmbiguity;
+                    }
                   }
                 } finally {
                   if (scroller.scrollTop !== 0) { await waitForScrollPaint(scroller, 0, 1000); }
@@ -474,12 +534,12 @@ internal static class ConsoleInventoryExtractor
           }
         }
 
-        // A complete result requires a reconciled unique-row total, or a verified pager
-        // reaching its disabled Next control when the pager exposes no total.
+        // A complete result needs a reconciled total, a pager at disabled Next, or a
+        // bounded unique-row scroll walk that remains at a stable physical bottom.
         var outcome;
         if (reportedTotal !== null && reportedTotal === rows.length) {
           outcome = 'complete';
-        } else if (reportedTotal === null && walkedToEnd && mode === 'paged') {
+        } else if (reportedTotal === null && walkedToEnd && (mode === 'paged' || mode === 'scrolled')) {
           outcome = 'complete';
         } else {
           outcome = 'incomplete';
@@ -708,7 +768,8 @@ internal static class ConsoleInventoryExtractor
             }
 
             var ambiguousDuplicates = false;
-            if (root.TryGetProperty("ambiguousDuplicates", out var ambiguousElement))
+            var ambiguousDuplicatesProvided = root.TryGetProperty("ambiguousDuplicates", out var ambiguousElement);
+            if (ambiguousDuplicatesProvided)
             {
                 if (ambiguousElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 {
@@ -804,7 +865,8 @@ internal static class ConsoleInventoryExtractor
             if (outcome == InventoryOutcome.Complete &&
                 (pageKindText != "computerList" || authenticationText != "authenticated" ||
                  ambiguousDuplicates ||
-                 (reportedTotal != rows.Count && !(reportedTotal is null && mode == "paged" && walkedToEnd))))
+                 (mode == "scrolled" && reportedTotal is null && !ambiguousDuplicatesProvided) ||
+                 (reportedTotal != rows.Count && !(reportedTotal is null && (mode == "paged" || mode == "scrolled") && walkedToEnd))))
             {
                 outcome = InventoryOutcome.Incomplete;
             }

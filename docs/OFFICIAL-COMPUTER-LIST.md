@@ -48,10 +48,7 @@ control, two view-mode toggles, a filter control, and a search box.
    row de-duplication key.
 5. Any documented per-device details (MAC/OS/last-online) require the separately permitted
    property/general view, which is out of scope for this extraction step.
-6. Because no total or pagination is visible, a first-run extraction cannot prove full-list
-   completeness; the honest outcome is `incomplete` unless the page itself reports a total.
-   Pagination and virtual scrolling are walked when the page provides them, and only a walk
-   that reached the end *and* matched a stated total is reported `complete`.
+6. Because the support screenshot has no total or pagination, the image alone cannot prove full-list completeness. At runtime, a no-total virtual-scroll read may be complete only after a bounded walk reaches the physical bottom and remains unchanged through two quiet 250ms checks, with no repeated indistinguishable row identity at a different content position. A reported total must reconcile and a verified pager must reach disabled Next. Scroll height alone is not a row count or completeness proof; otherwise the read remains `incomplete`.
 7. Connect must run in the owning account's own WebView by activating that row's Connect
    control, so the official client path is preserved.
 

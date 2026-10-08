@@ -236,6 +236,34 @@ internal static class InventoryFixture
         "<button id='opt-web' onclick=\"window.__chooserChoice='web'\">From the Web App in this browser</button>" +
         "</div></body></html>";
 
+    /// <summary>
+    /// Synthetic no-total virtual scroll matching the owner's structural survey: a
+    /// five-column table, 16 rendered rows, one 646px scroll owner, and a separate
+    /// unrelated scroll container. No row text represents live account data.
+    /// </summary>
+    public static string NoTotalVirtualisedListHtml(int totalRows, int scrollHeight, bool distantDuplicate = false)
+    {
+        if (totalRows < 16) throw new ArgumentOutOfRangeException(nameof(totalRows));
+        if (scrollHeight <= 646) throw new ArgumentOutOfRangeException(nameof(scrollHeight));
+        var rows = Enumerable.Range(1, totalRows)
+            .Select(i => $"{{n:'Fixture Node {i:D3}',d:'fixture-node-{i}',g:'Synthetic',t:''}}")
+            .ToArray();
+        if (distantDuplicate) rows[^1] = rows[0];
+
+        return """
+            <!doctype html><html><head><meta charset='utf-8'><title>Synthetic no-total virtual list</title>
+            <style>html,body{height:100%;margin:0;overflow:hidden}</style></head><body>
+            <div id='unrelated-scroller' style='height:80px;overflow-y:auto'><div style='height:160px'></div></div>
+            <div id='scroller' style='height:646px;overflow-y:auto'><div id='canvas' style='position:relative;height:__SCROLL_HEIGHT__px'>
+            <table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th>Other</th></tr></thead><tbody id='rows'></tbody></table>
+            </div></div>
+            <script>var all=[__ROWS__];var RH=44;var VH=646;var scroller=document.getElementById('scroller');var table=document.getElementById('computers');
+            function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;var slice=all.slice(start,start+count);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style="height:'+RH+'px"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label="Connect">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px');}
+            scroller.addEventListener('scroll',render);render();</script></body></html>
+            """.Replace("__SCROLL_HEIGHT__", scrollHeight.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("__ROWS__", string.Join(",", rows), StringComparison.Ordinal);
+    }
+
     public static string ShortViewportVirtualisedListHtml() => VirtualisedListHtml(
         title: "Short viewport computers", total: 24, rowHeight: 40, viewport: 48, repaintDelayMillis: 0);
 

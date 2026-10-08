@@ -80,6 +80,9 @@ internal static class BrowserSmokeTest
             await File.WriteAllTextAsync(Path.Combine(fixture, "short-viewport.html"), InventoryFixture.ShortViewportVirtualisedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "slow-repaint.html"), InventoryFixture.SlowRepaintVirtualisedListHtml());
             await File.WriteAllTextAsync(Path.Combine(fixture, "reconciled-scrollable.html"), InventoryFixture.ReconciledScrollableListHtml());
+            await File.WriteAllTextAsync(Path.Combine(fixture, "no-total-6014.html"), InventoryFixture.NoTotalVirtualisedListHtml(136, 6014));
+            await File.WriteAllTextAsync(Path.Combine(fixture, "no-total-25508.html"), InventoryFixture.NoTotalVirtualisedListHtml(579, 25508));
+            await File.WriteAllTextAsync(Path.Combine(fixture, "no-total-distant-duplicate.html"), InventoryFixture.NoTotalVirtualisedListHtml(136, 6014, distantDuplicate: true));
             grid.Children.Remove(panes[1]);
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
@@ -425,6 +428,46 @@ internal static class BrowserSmokeTest
         RequireVirtual(large.WalkMillis < 12000,
             "The 240-row virtual walk itself stays inside its budget", large, wallMillis: largeWallMillis);
 
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/no-total-6014.html", TimeSpan.FromSeconds(20));
+        var noTotalSurveyText = await pane.InspectConsoleAsync();
+        using (var noTotalSurvey = JsonDocument.Parse(noTotalSurveyText))
+        {
+            var surveyRoot = noTotalSurvey.RootElement;
+            var surveyTable = surveyRoot.GetProperty("tableSchemas")[0];
+            var scrollOwner = surveyTable.GetProperty("scrollAncestors")[0];
+            Require(surveyRoot.GetProperty("tables").GetInt32() == 1 &&
+                    surveyTable.GetProperty("headerCellCount").GetInt32() == 5 &&
+                    surveyTable.GetProperty("renderedRows").GetInt32() == 16 &&
+                    scrollOwner.GetProperty("clientHeight").GetInt32() == 646 &&
+                    scrollOwner.GetProperty("scrollHeight").GetInt32() == 6014 &&
+                    surveyRoot.GetProperty("scrollContainers").GetInt32() == 2,
+                "The synthetic no-total fixture matches the owner's bounded table/scroll survey shape");
+        }
+        Require(!noTotalSurveyText.Contains("Fixture Node", StringComparison.Ordinal),
+            "The structural scroll survey does not return row text");
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136),
+            "the 6014px no-total virtual list to be fully walked", TimeSpan.FromSeconds(30));
+        var noTotal6014 = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 136);
+        RequireVirtual(noTotal6014.Outcome == InventoryOutcome.Complete && noTotal6014.ReportedTotal is null &&
+                noTotal6014.Rows.Any(row => row.Name == "Fixture Node 136"),
+            "A no-total virtual list matching the first live scroll geometry completes only after a clear end", noTotal6014);
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/no-total-25508.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 579),
+            "the 25508px no-total virtual list to be fully walked", TimeSpan.FromSeconds(45));
+        var noTotal25508 = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 579);
+        RequireVirtual(noTotal25508.Outcome == InventoryOutcome.Complete && noTotal25508.ReportedTotal is null &&
+                noTotal25508.Rows.Any(row => row.Name == "Fixture Node 579"),
+            "A large no-total virtual list matching the second live scroll geometry completes only after a clear end", noTotal25508);
+
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/no-total-distant-duplicate.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 135),
+            "the no-total distant-duplicate list to finish its bounded walk", TimeSpan.FromSeconds(30));
+        var noTotalDistantDuplicate = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Mode == "scrolled" && item.Rows.Count == 135);
+        RequireVirtual(noTotalDistantDuplicate.Outcome == InventoryOutcome.Incomplete && noTotalDistantDuplicate.ReportedTotal is null &&
+                noTotalDistantDuplicate.Rows.Count == 135,
+            "Indistinguishable rows separated across the full scroll range remain incomplete", noTotalDistantDuplicate);
+
         await pane.NavigateAndWaitAsync(trustedOrigin + "/short-viewport.html", TimeSpan.FromSeconds(20));
         await WaitUntilAsync(() => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 24 && item.ReportedTotal == 24),
             "the 48-pixel viewport fixture to walk with overlap");
@@ -608,6 +651,12 @@ internal static class BrowserSmokeTest
             largeOutcome = large.Outcome.ToString(),
             largeWalkMillis = large.WalkMillis,
             largeWallMillis,
+            noTotal6014Rows = noTotal6014.Rows.Count,
+            noTotal6014Outcome = noTotal6014.Outcome.ToString(),
+            noTotal25508Rows = noTotal25508.Rows.Count,
+            noTotal25508Outcome = noTotal25508.Outcome.ToString(),
+            noTotalDistantDuplicateRows = noTotalDistantDuplicate.Rows.Count,
+            noTotalDistantDuplicateOutcome = noTotalDistantDuplicate.Outcome.ToString(),
             shortViewportRows = shortViewport.Rows.Count,
             slowRepaintOutcome = slowRepaint.Outcome.ToString(),
             reconciledRows = reconciled.Rows.Count,
