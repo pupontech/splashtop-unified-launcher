@@ -88,6 +88,7 @@ internal static class BrowserSmokeTest
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
             panes[1] = await CreatePaneAsync(grid, 1, environments[1], folders[1], fixture, null, null, statusMessages, snapshots.Enqueue);
             var inventory = await RunInventorySmokeAsync(panes[1], fixture, snapshots);
+            var connectLocator = await ConnectLocatorSmokeTest.RunAsync(panes[1], Path.Combine(root, "connect-locator"));
             var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
             Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
             var result = new
@@ -97,6 +98,7 @@ internal static class BrowserSmokeTest
                 webViewInitialized = panes.All(p => p.Core is not null),
                 nativeHandoff,
                 inventory,
+                connectLocator,
                 credentialSaving = new { passwordAutosaveEnabled = panes[0].Core.Settings.IsPasswordAutosaveEnabled, generalAutofillEnabled = panes[0].Core.Settings.IsGeneralAutofillEnabled },
                 isolation = new { sameProcessTwoAccounts = true, cookiesIsolated = true, localStorageIsolated = true, sessionStorageIsolated = true, persistenceAfterControlRecreation = true, persistenceAfterEnvironmentRecreation = true }
             };

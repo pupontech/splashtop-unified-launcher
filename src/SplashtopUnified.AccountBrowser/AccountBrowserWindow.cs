@@ -236,6 +236,7 @@ internal sealed class AccountBrowserWindow : Window
             {
                 "no-table" => $"{pane.AccountName} is not showing the computer list right now; the console was left untouched.",
                 "no-row" or "row-changed" => $"{pane.AccountName}'s selected row or document changed; refresh and select it again.",
+                "busy" => $"{pane.AccountName} is already reading or acting on its console; wait for that to finish and try Connect again.",
                 "no-control" => $"{pane.AccountName}'s row has no Connect control; the console was left untouched.",
                 _ => $"{pane.AccountName} could not be asked to connect ({outcome})."
             });

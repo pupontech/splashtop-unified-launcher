@@ -322,10 +322,19 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.inventory.virtualDuplicateOutcome -ne 'Incomplete') {
         throw 'Duplicate row multiplicity or ambiguous virtual-list evidence failed.'
     }
+    if ($runtimeResult.connectLocator.pagedLaterTarget -ne 'clicked' -or
+        $runtimeResult.connectLocator.virtualLaterTarget -ne 'clicked' -or
+        $runtimeResult.connectLocator.changedIdentity -ne 'no-row' -or
+        $runtimeResult.connectLocator.crossPageDuplicate -ne 'ambiguous-row' -or
+        $runtimeResult.connectLocator.navigationDuringLocate -ne 'row-changed' -or
+        $runtimeResult.connectLocator.fixture -notmatch 'invented') {
+        throw 'Connect did not locate an exact later-page or off-window target, or did not refuse a changed, duplicated, or navigated target.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
         credentialSaving = $runtimeResult.credentialSaving
         inventory = $runtimeResult.inventory
+        connectLocator = $runtimeResult.connectLocator
         environment = $EnvironmentName
         smokeTestArgument = '--smoke-test'
         exitCode = 0
@@ -453,7 +462,7 @@ Unofficial experimental software; not affiliated with or endorsed by Splashtop I
 8. Cached or non-current row statuses are marked `Cached:`, `Last read:`, `Partial read:`, or `Historical:` as applicable. The per-account summary identifies cached data as `cached (not live)` and notes a retained outcome or latest attempt when available. Cached, partial, historical, and failed-refresh rows cannot be used for `Connect`; a current complete read is required.
 9. During refresh, a percentage is shown only when the console reports a positive total. If the total is unknown, the progress bar remains indeterminate and the label reports the number of rows collected with `total unknown`. An active percentage tops out at 99%; 100% is shown only after a successful complete refresh.
 10. If the merged list is missing computers, press `Inspect consoles`, copy the read-only survey, and send it back. It reports only counts and control labels, never device data.
-11. Pressing `Connect` on an eligible current row first opens a foreground `Request connection` prompt in the unified-list window with `Request connection in Business app` and `Cancel`; cancel leaves the console untouched. This is a request, not a claim that the console currently offers Business. After confirmation, the app revalidates the selected computer, asks the owning account's console to connect and checks its actual chooser. If further choices are presented, only options recognized in that current chooser are shown. If the chooser is absent or an exception interrupts the attempt, the app reports the outcome as unconfirmed and advises refreshing before retrying. If the console changes before the choice can be applied or does not offer Business, the app reports that and does not silently select a web fallback.
+11. Pressing `Connect` on an eligible current row first opens a foreground `Request connection` prompt in the unified-list window with `Request connection in Business app` and `Cancel`; cancel leaves the console untouched. This is a request, not a claim that the console currently offers Business. After confirmation, the app locates the selected computer again in the owning account's own console: it follows the console's pager or virtual-scroll window in bounded steps until the exact row is rendered, rechecks the account, document, page/scroll position and every displayed field before acting, and then clicks only a unique visible Connect control in that row. A target on a later page or outside the currently visible rows is reached this way; a changed, duplicated or no-longer-rendered target is refused without clicking anything. `Refresh from consoles` and `Connect` share one console-walk lock, so a Connect that arrives during a refresh reports that the account is busy instead of interleaving. After the click, the app checks the chooser the console actually shows. If further choices are presented, only options recognized in that current chooser are shown. If the chooser is absent or an exception interrupts the attempt, the app reports the outcome as unconfirmed and advises refreshing before retrying. If the console changes before the choice can be applied or does not offer Business, the app reports that and does not silently select a web fallback.
 
 If WebView2 is missing, install it from Microsoft's official page above and restart the app. Do not download runtime DLLs or browser profiles from third-party sites.
 
