@@ -22,6 +22,7 @@
     <Compile Include="../../src/SplashtopUnified.AccountBrowser/InventoryRefreshProgress.cs" Link="InventoryRefreshProgress.cs" />
     <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConnectionChooser.cs" Link="ConnectionChooser.cs" />
     <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConsoleInventoryActions.cs" Link="ConsoleInventoryActions.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/ConnectLocatorScript.cs" Link="ConnectLocatorScript.cs" />
   </ItemGroup>
 
 </Project>
