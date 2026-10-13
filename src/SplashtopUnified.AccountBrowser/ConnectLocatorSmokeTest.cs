@@ -141,7 +141,7 @@ internal static class ConnectLocatorSmokeTest
             "function render(){var first=Math.floor(scroller.scrollTop/RH);var shown=all.slice(first,first+Math.ceil(VH/RH)+1);" +
             "document.getElementById('rows').innerHTML=shown.map(function(r){return '<tr style=\"height:'+RH+'px\"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><span aria-label=\"'+r.s+'\"></span><button aria-label=\"Connect\">Connect</button></td></tr>';}).join('');" +
             "Array.prototype.forEach.call(document.querySelectorAll('tbody button'),function(button,index){button.onclick=function(){window.__connectClicks++;window.__connectedTarget=shown[index].d;};});" +
-            "table.style.transform='translateY('+(first*RH)+'px');}scroller.addEventListener('scroll',render);render();</script></body></html>";
+            "table.style.transform='translateY('+(first*RH)+'px)';}scroller.addEventListener('scroll',render);render();</script></body></html>";
     }
 
     private static async Task<string> ReadStringAsync(AccountWebViewPane pane, string script)
