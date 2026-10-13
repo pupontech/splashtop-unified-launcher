@@ -22,6 +22,10 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly object _inventorySync = new();
     private readonly InventoryRequestLifecycle<InventoryRequest> _inventoryRequestLifecycle = new();
     private readonly ConsoleInspection _consoleInspection = new();
+    private readonly SemaphoreSlim _consoleWalkGate = new(1, 1);
+    private static readonly JsonSerializerOptions ConnectStepJsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private const int ConnectLocatorMaxSteps = 80;
+    private static readonly TimeSpan ConnectLocatorTimeout = TimeSpan.FromSeconds(20);
     private IReadOnlyList<ExtractedComputerRow> _lastExtractedRows = [];
     private string? _lastRowsDocumentSource;
     private int _lastRowsGeneration = -1;
@@ -249,6 +253,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     private async Task<InventoryRequestAttempt> StartInventoryRequestAsync(int generation, bool joinMatchingActive = false)
+    {
+        if (!await _consoleWalkGate.WaitAsync(TimeSpan.FromSeconds(22)))
+        {
+            return new InventoryRequestAttempt(null, false);
+        }
+
+        try
+        {
+            return await StartInventoryRequestCoreAsync(generation, joinMatchingActive);
+        }
+        finally
+        {
+            _consoleWalkGate.Release();
+        }
+    }
+
+    private async Task<InventoryRequestAttempt> StartInventoryRequestCoreAsync(int generation, bool joinMatchingActive = false)
     {
         var core = _webView.CoreWebView2;
         if (_disposed || core is null || !IsOfficialConsoleOrigin(core.Source))
@@ -541,46 +562,360 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     }
 
     /// <summary>
-    /// Connects only when the immutable target still matches this account, document,
-    /// generation, row position and all visible fields after any foreground prompt.
-    /// The page script repeats that identity check against the live DOM before clicking.
+    /// Connects only after a bounded page/window walk locates one exact live identity.
+    /// Every host-issued step rechecks account, document, generation and snapshot identity;
+    /// the synchronous page click repeats the exact identity and control checks.
     /// </summary>
     public async Task<string> ActivateConnectAsync(InventoryActionTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (_disposed || _webView.CoreWebView2 is not { } core)
+        if (!await _consoleWalkGate.WaitAsync(0))
         {
-            return "no-webview";
+            return "busy";
         }
 
-        if (!IsOfficialConsoleOrigin(core.Source))
+        ConnectOperation? operation = null;
+        try
         {
-            return "blocked-origin";
+            if (_disposed || _webView.CoreWebView2 is not { } core)
+            {
+                return "no-webview";
+            }
+
+            if (!IsOfficialConsoleOrigin(core.Source))
+            {
+                return "blocked-origin";
+            }
+
+            if (_inventoryRequestLifecycle.HasActiveRequest)
+            {
+                return "busy";
+            }
+
+            int inventoryRowCount;
+            lock (_inventorySync)
+            {
+                if (!IsCurrentConnectTarget(target, core, target.DocumentSource, target.Generation))
+                {
+                    return "row-changed";
+                }
+
+                inventoryRowCount = _lastExtractedRows.Count;
+            }
+
+            if (!target.Row.HasConnectControl)
+            {
+                return "no-control";
+            }
+
+            operation = new ConnectOperation(this, target, core, target.DocumentSource,
+                target.Generation, inventoryRowCount, DateTimeOffset.UtcNow + ConnectLocatorTimeout);
+            return await LocateAndActivateConnectAsync(operation);
+        }
+        catch (Exception)
+        {
+            return "connect-failed";
+        }
+        finally
+        {
+            if (operation?.PendingScript is { } pending)
+            {
+                _ = ReleaseConsoleWalkGateWhenCompleteAsync(pending);
+            }
+            else
+            {
+                _consoleWalkGate.Release();
+            }
+        }
+    }
+
+    private bool IsCurrentConnectTarget(InventoryActionTarget target, CoreWebView2 core, string source, int generation)
+    {
+        if (_disposed || _webView.CoreWebView2 is null || !ReferenceEquals(_webView.CoreWebView2, core) ||
+            !IsOfficialConsoleOrigin(core.Source) || !string.Equals(core.Source, source, StringComparison.Ordinal))
+        {
+            return false;
         }
 
         lock (_inventorySync)
         {
-            if (_lastRowsGeneration != _inventoryGeneration ||
-                !string.Equals(_lastRowsDocumentSource, core.Source, StringComparison.Ordinal) ||
-                target.RowIndex < 0 || target.RowIndex >= _lastExtractedRows.Count ||
-                !ConsoleInventoryActionGuard.IsCurrentTarget(target, AccountId, target.RowIndex, core.Source,
-                    _inventoryGeneration, _lastExtractedRows[target.RowIndex]))
+            return !_disposed && generation == _inventoryGeneration &&
+                _lastRowsGeneration == generation &&
+                string.Equals(_lastRowsDocumentSource, source, StringComparison.Ordinal) &&
+                target.RowIndex >= 0 && target.RowIndex < _lastExtractedRows.Count &&
+                ConsoleInventoryActionGuard.IsCurrentTarget(target, AccountId, target.RowIndex, source,
+                    generation, _lastExtractedRows[target.RowIndex]);
+        }
+    }
+
+    private async Task<string> LocateAndActivateConnectAsync(ConnectOperation operation)
+    {
+        var initial = await operation.StepAsync("read");
+        if (initial.Step is null || initial.Step.Status != "ok") return initial.Status;
+
+        if (initial.Step.HasPager)
+        {
+            return await LocateInPagerAsync(operation, initial.Step);
+        }
+
+        if (initial.Step.ScrollMax > 0 && initial.Step.RenderedRowCount < operation.InventoryRowCount)
+        {
+            return await LocateInVirtualListAsync(operation, initial.Step);
+        }
+
+        return await ClickUniqueCurrentRowAsync(operation, initial.Step, null, null);
+    }
+
+    private async Task<string> LocateInPagerAsync(ConnectOperation operation, ConnectLocatorStep first)
+    {
+        var pageTokens = new List<string>();
+        string? targetPage = null;
+        long? targetPosition = null;
+        var targetControlCount = 0;
+        var current = first;
+        for (var page = 0; page < ConnectLocatorMaxSteps; page++)
+        {
+            if (string.IsNullOrEmpty(current.PageToken) || pageTokens.Contains(current.PageToken, StringComparer.Ordinal))
+                return "locator-ambiguous";
+            pageTokens.Add(current.PageToken);
+
+            if (current.TargetCount > 0)
             {
-                return "row-changed";
+                if (current.TargetCount != 1 || targetPage is not null) return "ambiguous-row";
+                targetPage = current.PageToken;
+                targetPosition = current.TargetPositions.SingleOrDefault();
+                targetControlCount = current.TargetControlCounts.SingleOrDefault();
+            }
+
+            if (!current.NextEnabled) break;
+            if (page == ConnectLocatorMaxSteps - 1) return "locator-limit";
+            var oldToken = current.PageToken;
+            var action = await operation.StepAsync("next", oldToken);
+            if (action.Step is null || action.Step.Status != "action-started") return action.Status;
+            var changed = await WaitForPagerChangeAsync(operation, oldToken, null);
+            if (changed.Step is null) return changed.Status;
+            current = changed.Step;
+        }
+
+        if (targetPage is null) return "no-row";
+        if (targetControlCount != 1) return targetControlCount == 0 ? "no-control" : "ambiguous-control";
+        var targetIndex = pageTokens.FindIndex(token => string.Equals(token, targetPage, StringComparison.Ordinal));
+        if (targetIndex < 0) return "locator-ambiguous";
+
+        for (var index = pageTokens.Count - 1; index > targetIndex; index--)
+        {
+            var action = await operation.StepAsync("previous", pageTokens[index]);
+            if (action.Step is null || action.Step.Status != "action-started") return action.Status;
+            var restored = await WaitForPagerChangeAsync(operation, pageTokens[index], pageTokens[index - 1]);
+            if (restored.Step is null) return restored.Status;
+            current = restored.Step;
+        }
+
+        var revalidated = await operation.StepAsync("read", targetPage);
+        if (revalidated.Step is null || revalidated.Step.Status != "ok") return revalidated.Status;
+        if (revalidated.Step.TargetCount != 1 || revalidated.Step.TargetPositions.SingleOrDefault() != targetPosition)
+            return "identity-mismatch";
+        if (revalidated.Step.TargetControlCounts.SingleOrDefault() != 1) return "no-control";
+        return await ClickUniqueCurrentRowAsync(operation, revalidated.Step, targetPage, targetPosition);
+    }
+
+    private async Task<(ConnectLocatorStep? Step, string Status)> WaitForPagerChangeAsync(
+        ConnectOperation operation,
+        string oldToken,
+        string? desiredToken)
+    {
+        while (DateTimeOffset.UtcNow < operation.Deadline)
+        {
+            await Task.Delay(50);
+            var read = await operation.StepAsync("read");
+            if (read.Step is null || read.Step.Status != "ok") return read;
+            if (desiredToken is not null
+                ? string.Equals(read.Step.PageToken, desiredToken, StringComparison.Ordinal)
+                : !string.Equals(read.Step.PageToken, oldToken, StringComparison.Ordinal)) return read;
+        }
+
+        return (null, "timeout");
+    }
+
+    private async Task<string> LocateInVirtualListAsync(ConnectOperation operation, ConnectLocatorStep initial)
+    {
+        var positions = new HashSet<long>();
+        var controls = new Dictionary<long, int>();
+        AddVirtualMatches(initial, positions, controls);
+        var current = initial;
+        var stableBottomReads = 0;
+        uint previousBottomSignature = 0;
+        double previousBottomMax = -1;
+
+        for (var step = 0; step < ConnectLocatorMaxSteps; step++)
+        {
+            if (current.ScrollTop + current.ScrollClient >= current.ScrollMax - 8)
+            {
+                if (stableBottomReads >= 2 && current.Signature == previousBottomSignature &&
+                    Math.Abs(current.ScrollMax - previousBottomMax) < 1)
+                {
+                    break;
+                }
+
+                stableBottomReads = current.Signature == previousBottomSignature &&
+                    Math.Abs(current.ScrollMax - previousBottomMax) < 1 ? stableBottomReads + 1 : 1;
+                previousBottomSignature = current.Signature;
+                previousBottomMax = current.ScrollMax;
+                await Task.Delay(125);
+                var bottomRead = await operation.StepAsync("read");
+                if (bottomRead.Step is null || bottomRead.Step.Status != "ok") return bottomRead.Status;
+                AddVirtualMatches(bottomRead.Step, positions, controls);
+                current = bottomRead.Step;
+                continue;
+            }
+
+            stableBottomReads = 0;
+            var desired = Math.Min(current.ScrollMax, current.ScrollTop + Math.Max(1, current.ScrollClient * 0.8));
+            var action = await operation.StepAsync("scroll", desiredScrollTop: desired);
+            if (action.Step is null || action.Step.Status != "action-started") return action.Status;
+            var priorSignature = current.Signature;
+            var repaintDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(1.5);
+            ConnectLocatorStep? painted = null;
+            while (DateTimeOffset.UtcNow < repaintDeadline && DateTimeOffset.UtcNow < operation.Deadline)
+            {
+                await Task.Delay(50);
+                var read = await operation.StepAsync("read");
+                if (read.Step is null || read.Step.Status != "ok") return read.Status;
+                if (read.Step.ScrollTop >= desired - 1 && read.Step.Signature != priorSignature)
+                {
+                    painted = read.Step;
+                    break;
+                }
+            }
+
+            if (painted is null) return "locator-no-progress";
+            AddVirtualMatches(painted, positions, controls);
+            current = painted;
+        }
+
+        if (current.ScrollTop + current.ScrollClient < current.ScrollMax - 8) return "locator-limit";
+        if (positions.Count == 0) return "no-row";
+        if (positions.Count != 1) return "ambiguous-row";
+        var targetPosition = positions.Single();
+        if (!controls.TryGetValue(targetPosition, out var controlCount) || controlCount != 1)
+            return controlCount == 0 ? "no-control" : "ambiguous-control";
+
+        if (!current.TargetPositions.Contains(targetPosition))
+        {
+            var desired = Math.Max(0, targetPosition / 1000d - current.ScrollClient / 2);
+            var action = await operation.StepAsync("scroll", desiredScrollTop: desired);
+            if (action.Step is null || action.Step.Status != "action-started") return action.Status;
+            var visible = await WaitForVirtualTargetAsync(operation, targetPosition);
+            if (visible.Step is null) return visible.Status;
+            current = visible.Step;
+        }
+
+        return await ClickUniqueCurrentRowAsync(operation, current, null, targetPosition);
+    }
+
+    private static void AddVirtualMatches(ConnectLocatorStep step, HashSet<long> positions, Dictionary<long, int> controls)
+    {
+        for (var index = 0; index < step.TargetPositions.Length; index++)
+        {
+            var position = step.TargetPositions[index];
+            positions.Add(position);
+            controls[position] = step.TargetControlCounts[index];
+        }
+    }
+
+    private async Task<(ConnectLocatorStep? Step, string Status)> WaitForVirtualTargetAsync(ConnectOperation operation, long targetPosition)
+    {
+        while (DateTimeOffset.UtcNow < operation.Deadline)
+        {
+            await Task.Delay(50);
+            var read = await operation.StepAsync("read");
+            if (read.Step is null || read.Step.Status != "ok") return read;
+            if (read.Step.TargetPositions.Contains(targetPosition)) return read;
+        }
+
+        return (null, "timeout");
+    }
+
+    private async Task<string> ClickUniqueCurrentRowAsync(
+        ConnectOperation operation,
+        ConnectLocatorStep current,
+        string? pageToken,
+        long? position)
+    {
+        if (current.TargetCount != 1) return current.TargetCount == 0 ? "no-row" : "ambiguous-row";
+        if (position is not null && current.TargetPositions.SingleOrDefault() != position) return "identity-mismatch";
+        if (current.TargetControlCounts.SingleOrDefault() != 1) return "no-control";
+        var click = await operation.StepAsync("click", pageToken, position);
+        return click.Step?.Status == "clicked" ? "clicked" : click.Status;
+    }
+
+    private async Task ReleaseConsoleWalkGateWhenCompleteAsync(Task<string> pendingScript)
+    {
+        try { await pendingScript; }
+        catch (Exception) { }
+        finally { _consoleWalkGate.Release(); }
+    }
+
+    private sealed class ConnectOperation(
+        AccountWebViewPane owner,
+        InventoryActionTarget target,
+        CoreWebView2 core,
+        string source,
+        int generation,
+        int inventoryRowCount,
+        DateTimeOffset deadline)
+    {
+        private double? _documentToken;
+        public Task<string>? PendingScript { get; private set; }
+        public DateTimeOffset Deadline { get; } = deadline;
+        public int InventoryRowCount { get; } = inventoryRowCount;
+
+        public async Task<(ConnectLocatorStep? Step, string Status)> StepAsync(
+            string command,
+            string? pageToken = null,
+            long? expectedPosition = null,
+            double? desiredScrollTop = null)
+        {
+            if (!owner.IsCurrentConnectTarget(target, core, source, generation)) return (null, "row-changed");
+            var remaining = Deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero) return (null, "timeout");
+            var deadlineMilliseconds = Deadline.ToUnixTimeMilliseconds();
+            if (command == "click" && _documentToken is null) return (null, "connect-failed");
+            var script = command == "click"
+                ? ConsoleInventoryActions.ActivateConnectScript(target.Row, source, _documentToken!.Value,
+                    pageToken, expectedPosition, deadlineMilliseconds)
+                : ConnectLocatorScript.CreateStep(command, target.Row, source, _documentToken,
+                    pageToken, expectedPosition, desiredScrollTop, deadlineMilliseconds);
+            Task<string> execution;
+            try { execution = core.ExecuteScriptAsync(script); }
+            catch (Exception) { return (null, "connect-failed"); }
+
+            if (await Task.WhenAny(execution, Task.Delay(remaining)) != execution)
+            {
+                PendingScript = execution;
+                return (null, "timeout");
+            }
+
+            string raw;
+            try { raw = await execution; }
+            catch (Exception) { return (null, "connect-failed"); }
+            if (!owner.IsCurrentConnectTarget(target, core, source, generation)) return (null, "row-changed");
+
+            try
+            {
+                var json = JsonSerializer.Deserialize<string>(raw) ?? string.Empty;
+                var step = JsonSerializer.Deserialize<ConnectLocatorStep>(json, ConnectStepJsonOptions);
+                if (step is null) return (null, "connect-failed");
+                if (step.Status is "blocked-origin" or "document-changed" or "page-changed") return (null, "row-changed");
+                if (step.Status == "expired") return (null, "timeout");
+                if (_documentToken is null && step.DocumentToken > 0) _documentToken = step.DocumentToken;
+                return (step, step.Status == "error" ? "connect-failed" : step.Status);
+            }
+            catch (JsonException)
+            {
+                return (null, "connect-failed");
             }
         }
-
-        if (!target.Row.HasConnectControl)
-        {
-            return "no-control";
-        }
-
-        var source = core.Source;
-        var generation = target.Generation;
-        var raw = await core.ExecuteScriptAsync(ConsoleInventoryActions.ActivateConnectScript(target.RowIndex, target.Row));
-        return string.Equals(source, core.Source, StringComparison.Ordinal) && generation == _inventoryGeneration && IsOfficialConsoleOrigin(core.Source)
-            ? raw.Trim('"')
-            : "row-changed";
     }
 
     /// <summary>Compatibility convenience for smoke tests that activate without a modal prompt.</summary>
