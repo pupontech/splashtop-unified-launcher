@@ -37,14 +37,16 @@ public sealed class ConnectLocatorScriptTests
         Assert.Contains("my.splashtop.eu", script, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void InlinedStepPayloadKeepsTheRequestAsAnObjectThePageCanRead()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void InlinedStepPayloadKeepsTheRequestAsAnObjectThePageCanRead(string newline)
     {
         var row = new ExtractedComputerRow("Later host", "later-device", "Lab", "target", true, "Online");
         var script = ConnectLocatorScript.CreateStep(
             "click", row, "https://my.splashtop.com/computers", 1234, "range:3-4 of 8", 40000, null, 9999999999999);
 
-        var payload = ExtractInlinedPayload(script);
+        using var payload = ExtractInlinedPayload(script.ReplaceLineEndings(newline));
         Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("request").ValueKind);
         Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("expected").ValueKind);
         var request = payload.RootElement.GetProperty("request");
@@ -76,6 +78,7 @@ public sealed class ConnectLocatorScriptTests
 
     private static JsonDocument ExtractInlinedPayload(string script)
     {
+        script = script.ReplaceLineEndings("\n");
         const string marker = "var payload = ";
         var start = script.IndexOf(marker, StringComparison.Ordinal);
         Assert.True(start >= 0, "the generated script must inline its payload");
