@@ -89,7 +89,9 @@ internal static class ConnectLocatorSmokeTest
         await pane.ExecuteScriptAsync("window.__connectClicks=0;window.__connectedTarget='';");
         Require(pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured) && captured is not null,
             $"The synthetic target is captured from complete inventory for {fileName}.");
-        return await pane.ActivateConnectAsync(captured!);
+        var result = await pane.ActivateConnectAsync(captured!);
+        Console.Error.WriteLine($"SMOKE_CONNECT_RESULT={fileName}:{result}");
+        return result;
     }
 
     private static async Task<string> RunVirtualAsync(

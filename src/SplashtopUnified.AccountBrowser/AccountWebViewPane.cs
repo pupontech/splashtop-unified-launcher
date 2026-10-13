@@ -905,6 +905,8 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             {
                 var json = JsonSerializer.Deserialize<string>(raw) ?? string.Empty;
                 var step = JsonSerializer.Deserialize<ConnectLocatorStep>(json, ConnectStepJsonOptions);
+                if (source.EndsWith("/connect-paged.html", StringComparison.Ordinal))
+                    Console.Error.WriteLine($"SMOKE_CONNECT_STEP={command}:{json}");
                 if (step is null) return (null, "connect-failed");
                 if (step.Status is "blocked-origin" or "document-changed" or "page-changed") return (null, "row-changed");
                 if (step.Status == "expired") return (null, "timeout");
