@@ -754,7 +754,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
         for (var step = 0; step < ConnectLocatorMaxSteps; step++)
         {
-            if (current.ScrollTop + current.ScrollClient >= current.ScrollMax - 8)
+            if (current.IsAtScrollEnd)
             {
                 if (stableBottomReads >= 2 && current.Signature == previousBottomSignature &&
                     Math.Abs(current.ScrollMax - previousBottomMax) < 1)
@@ -798,7 +798,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             current = painted;
         }
 
-        if (current.ScrollTop + current.ScrollClient < current.ScrollMax - 8) return "locator-limit";
+        if (!current.IsAtScrollEnd || stableBottomReads < 2) return "locator-limit";
         if (positions.Count == 0) return "no-row";
         if (positions.Count != 1) return "ambiguous-row";
         var targetPosition = positions.Single();

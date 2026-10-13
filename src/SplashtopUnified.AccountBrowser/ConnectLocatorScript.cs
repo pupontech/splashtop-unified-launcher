@@ -13,6 +13,8 @@ internal sealed record ConnectLocatorStep
     public double ScrollTop { get; init; }
     public double ScrollClient { get; init; }
     public double ScrollMax { get; init; }
+    // ScrollMax is already scrollHeight - clientHeight, not the content height.
+    public bool IsAtScrollEnd => ScrollTop >= ScrollMax - 1;
     public uint Signature { get; init; }
     public int TargetCount { get; init; }
     public int RenderedRowCount { get; init; }

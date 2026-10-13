@@ -76,6 +76,17 @@ public sealed class ConnectLocatorScriptTests
         Assert.DoesNotContain("\\\\", script, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(360, 144, 504, false)]
+    [InlineData(460, 144, 504, false)]
+    [InlineData(504, 144, 504, true)]
+    [InlineData(503.5, 144, 504, true)]
+    public void ScrollEndUsesMaximumOffsetNotContentHeight(double top, double client, double max, bool expected)
+    {
+        var step = new ConnectLocatorStep { ScrollTop = top, ScrollClient = client, ScrollMax = max };
+        Assert.Equal(expected, step.IsAtScrollEnd);
+    }
+
     private static JsonDocument ExtractInlinedPayload(string script)
     {
         script = script.ReplaceLineEndings("\n");
