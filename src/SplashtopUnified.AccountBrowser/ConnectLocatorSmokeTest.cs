@@ -57,7 +57,7 @@ internal static class ConnectLocatorSmokeTest
         var virtualTarget = virtualRows[^1];
         var virtualResult = await RunVirtualAsync(pane, root, virtualRows, virtualTarget, virtualCount - 1);
         Require(virtualResult == "clicked" && await ReadStringAsync(pane, "window.__connectedTarget||''") == virtualTarget.DeviceName,
-            "A complete virtual inventory connects an exact target outside the initial rendered window.");
+            $"A complete virtual inventory connects an exact target outside the initial rendered window (result: {virtualResult}).");
 
         return new
         {
