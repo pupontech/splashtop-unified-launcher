@@ -258,7 +258,7 @@ internal static class InventoryFixture
             <table id='computers' style='position:absolute;left:0;right:0;top:0'><thead><tr><th>Computer Name</th><th>Device Name</th><th>Group</th><th>Notes</th><th>Other</th></tr></thead><tbody id='rows'></tbody></table>
             </div></div>
             <script>var all=[__ROWS__];var RH=44;var VH=646;var scroller=document.getElementById('scroller');var table=document.getElementById('computers');
-            function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;var slice=all.slice(start,start+count);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style="height:'+RH+'px"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label="Connect">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px');}
+            function render(){var start=Math.floor(scroller.scrollTop/RH);var count=Math.ceil(VH/RH)+1;var slice=all.slice(start,start+count);document.getElementById('rows').innerHTML=slice.map(function(r){return '<tr style="height:'+RH+'px"><td>'+r.n+'</td><td>'+r.d+'</td><td>'+r.g+'</td><td>'+r.t+'</td><td><button aria-label="Connect">Connect</button></td></tr>';}).join('');table.style.transform='translateY('+(start*RH)+'px)';}
             scroller.addEventListener('scroll',render);render();</script></body></html>
             """.Replace("__SCROLL_HEIGHT__", scrollHeight.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("__ROWS__", string.Join(",", rows), StringComparison.Ordinal);
