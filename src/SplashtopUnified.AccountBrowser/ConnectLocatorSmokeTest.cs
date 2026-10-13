@@ -107,7 +107,13 @@ internal static class ConnectLocatorSmokeTest
         var refresh = await pane.RequestInventoryAsync();
         Require(refresh == InventoryRefreshKind.Complete, "Virtual synthetic inventory is complete.");
         await pane.ExecuteScriptAsync("window.__connectClicks=0;window.__connectedTarget='';");
-        Require(pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured) && captured is not null,
+        var capturedOk = pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured);
+        if (!capturedOk)
+        {
+            var field = typeof(AccountWebViewPane).GetField("_lastExtractedRows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Console.Error.WriteLine("SMOKE_VIRTUAL_CAPTURE=" + JsonSerializer.Serialize(field?.GetValue(pane)));
+        }
+        Require(capturedOk && captured is not null,
             "The virtual target is captured from complete inventory.");
         return await pane.ActivateConnectAsync(captured!);
     }
