@@ -107,13 +107,7 @@ internal static class ConnectLocatorSmokeTest
         var refresh = await pane.RequestInventoryAsync();
         Require(refresh == InventoryRefreshKind.Complete, "Virtual synthetic inventory is complete.");
         await pane.ExecuteScriptAsync("window.__connectClicks=0;window.__connectedTarget='';");
-        var capturedOk = pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured);
-        if (!capturedOk)
-        {
-            var field = typeof(AccountWebViewPane).GetField("_lastExtractedRows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Console.Error.WriteLine("SMOKE_VIRTUAL_CAPTURE=" + JsonSerializer.Serialize(field?.GetValue(pane)));
-        }
-        Require(capturedOk && captured is not null,
+        Require(pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured) && captured is not null,
             "The virtual target is captured from complete inventory.");
         return await pane.ActivateConnectAsync(captured!);
     }
@@ -172,6 +166,8 @@ internal static class ConnectLocatorSmokeTest
 
     private sealed record SyntheticRow(string Name, string DeviceName, string Group, string Notes, string Status)
     {
-        public ExtractedComputerRow ToExtractedRow() => new(Name, DeviceName, Group, Notes, true, Status);
+        // The production payload parser represents blank optional fields as null.
+        public ExtractedComputerRow ToExtractedRow() => new(Name, DeviceName, Group,
+            string.IsNullOrEmpty(Notes) ? null : Notes, true, Status);
     }
 }
