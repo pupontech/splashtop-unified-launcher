@@ -60,3 +60,12 @@ Two defects were confirmed after `v0.3.8-test`; neither was a completeness-rule 
 Local deterministic evidence: a linked-source Chromium replay (`tests/SplashtopUnified.Extractor.ReplayHarness`) compiles the production extractor and fixture sources, fulfills only exact official-origin fixture documents over CDP with DNS denied, and asserts 19 extraction shapes plus the production host validator (19/19 accepted). Connect locating is asserted by `ConnectLocatorScriptTests` locally and by the invented paged/virtual fixtures that the Windows smoke now runs and the package script gates.
 
 Local gates on the working head: 244 tests across seven suites, zero failed, zero skipped; WPF cross-build zero warnings/errors; `git diff --check` clean; PowerShell parse of the package script clean. Linux Chromium replay is not Windows WebView2/WPF proof, and no live account, credential, private API or vendor DOM was used. Hosted Windows runtime evidence and the package bytes for this head are recorded separately once the exact-commit runs pass, and owner live acceptance remains untouched.
+
+### Follow-up defects found by the linked-source browser replay (same head)
+
+Two further defects in the new locator were reproduced locally by the extension of that replay to the Connect read/click steps, and both are fixed:
+
+- The inlined step payload embedded the request as a JSON *string*, so every property read in the page (`request.expectedUrl`, `request.deadlineEpochMilliseconds`, ...) was `undefined`. Every locator step therefore returned `blocked-origin`, which the host reports as a changed row: Connect could never click anything on any console.
+- The locator's regular expressions were written with doubled backslashes inside a raw string literal, so the page received patterns looking for a literal backslash. A range-style pager label (`1-3 of 9`) then failed to parse, every paged console was rejected as `invalid-pager`, and whitespace was never collapsed.
+
+Both are covered by new unit regressions (payload shape, single-backslash escapes) and by nine Connect targets in the Chromium replay: seven exact identities on plain, reordered, nested, paged, virtual, no-total-6014 and 25508 shapes must click exactly once, and a control-less row and a changed identity must be refused with zero clicks. The Windows smoke expectations that described the old index-based refusal statuses were reconciled; no guard was relaxed.

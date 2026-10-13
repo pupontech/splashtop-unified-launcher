@@ -329,7 +329,7 @@ internal static class BrowserSmokeTest
 
         await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr td').textContent='Changed fixture identity'");
         var changedIdentity = await pane.ActivateConnectAsync(0);
-        Require(changedIdentity == "identity-mismatch", "The current live row identity is revalidated before Connect");
+        Require(changedIdentity == "no-row", "A row whose live identity no longer matches the captured one is refused before Connect");
 
         var missingRow = await pane.ActivateConnectAsync(99);
         Require(missingRow == "no-row", "A stale row index is refused without clicking anything");
@@ -535,7 +535,7 @@ internal static class BrowserSmokeTest
         var reorderedClickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
         Require(reorderedClickCount.Trim() == "1", "The reordered fixture observed exactly one mapped Connect activation");
         await pane.ExecuteScriptAsync("document.querySelector('#computers tbody tr td:nth-child(4)').textContent='Changed fixture identity'");
-        Require(await pane.ActivateConnectAsync(0) == "identity-mismatch", "Connect refuses a changed row identity in the reordered fixture");
+        Require(await pane.ActivateConnectAsync(0) == "no-row", "Connect refuses a changed row identity in the reordered fixture");
 
         var beforeNested = snapshots.Count;
         await pane.NavigateAndWaitAsync(trustedOrigin + "/nested-rows.html", TimeSpan.FromSeconds(20));

@@ -47,16 +47,22 @@ internal static class ConnectLocatorScript
             desiredScrollTop,
             deadlineEpochMilliseconds
         });
-        var expected = new
+        var expected = JsonSerializer.Serialize(new
         {
             name = expectedRow.Name,
             deviceName = expectedRow.DeviceName ?? string.Empty,
             group = expectedRow.Group ?? string.Empty,
             notes = expectedRow.Notes ?? string.Empty,
             status = expectedRow.Status ?? string.Empty
-        };
+        });
 
-        return ScriptTemplate.Replace("__PAYLOAD__", JsonSerializer.Serialize(new { request, expected }), StringComparison.Ordinal);
+        // The page reads payload.request as an object. Serializing this pair as an anonymous
+        // object would embed the request as a JSON string and every property read in the page
+        // would be undefined, which silently turns every step into a refused origin check.
+        return ScriptTemplate.Replace(
+            "__PAYLOAD__",
+            string.Concat("{\"request\":", request, ",\"expected\":", expected, "}"),
+            StringComparison.Ordinal);
     }
 
     private const string ScriptTemplate = """
@@ -74,7 +80,7 @@ internal static class ConnectLocatorScript
           return result('blocked-origin');
         var documentToken = performance.timeOrigin;
         if (request.documentToken !== null && request.documentToken !== documentToken) return result('document-changed');
-        var clean = function (value) { return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim(); };
+        var clean = function (value) { return String(value == null ? '' : value).replace(/\s+/g, ' ').trim(); };
         var visible = function (node) {
           if (!node || !node.isConnected) return false;
           for (var current = node; current && current.nodeType === 1; current = current.parentElement) {
@@ -117,7 +123,7 @@ internal static class ConnectLocatorScript
           for (var i = 0; i < nodes.length; i++) {
             var text = clean(nodes[i].getAttribute('aria-label') || nodes[i].getAttribute('title') || nodes[i].getAttribute('alt') || '');
             if (words.test(text)) return text;
-            var match = text.match(/\\b(online|offline|available|unavailable|connected|disconnected|in use|busy|idle|unreachable|sleeping|locked)\\b/i);
+            var match = text.match(/\b(online|offline|available|unavailable|connected|disconnected|in use|busy|idle|unreachable|sleeping|locked)\b/i);
             if (match && text.length <= 40) return match[1];
           }
           return '';
@@ -159,7 +165,7 @@ internal static class ConnectLocatorScript
         var scrollClient = scroller ? scroller.clientHeight : 0;
         var scrollMax = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
         var rangeTotal = function (text) {
-          var match = clean(text).match(/^\\d[\\d,]*\\s*[-–]\\s*\\d[\\d,]*\\s+of\\s+(\\d[\\d,]*)$/i);
+          var match = clean(text).match(/^\d[\d,]*\s*[-–]\s*\d[\d,]*\s+of\s+(\d[\d,]*)$/i);
           return match ? parseInt(match[1].replace(/,/g, ''), 10) : null;
         };
         var navs = Array.prototype.slice.call(document.querySelectorAll('nav[aria-label],[role=navigation][aria-label]')).filter(function (node) {
@@ -172,7 +178,7 @@ internal static class ConnectLocatorScript
           var nav = navs[0];
           var ranges = Array.prototype.slice.call(nav.querySelectorAll('*')).filter(function (node) { return visible(node) && rangeTotal(node.textContent) !== null; });
           var current = Array.prototype.filter.call(nav.querySelectorAll('[aria-current=page]'), visible);
-          var marker = current.length === 1 ? clean(current[0].textContent).match(/^(?:page\\s+)?(\\d+)$/i) : null;
+          var marker = current.length === 1 ? clean(current[0].textContent).match(/^(?:page\s+)?(\d+)$/i) : null;
           var actions = function (names) {
             return Array.prototype.slice.call(nav.querySelectorAll('button,[role=button],a')).filter(function (node) {
               return safeAction(node, true) && names.indexOf(clean(node.getAttribute('aria-label') || node.innerText || node.textContent).toLowerCase()) !== -1;
@@ -191,7 +197,7 @@ internal static class ConnectLocatorScript
           positions.push(position);
           controlCounts.push(controlsFor(row).length);
         });
-        var signatureText = rows.map(function (row) { return clean(row.textContent); }).join('\\u001f');
+        var signatureText = rows.map(function (row) { return clean(row.textContent); }).join('\u001f');
         var signature = 2166136261;
         for (var si = 0; si < signatureText.length; si++) signature = Math.imul(signature ^ signatureText.charCodeAt(si), 16777619);
         var state = { documentToken: documentToken, pageToken: pageToken, hasPager: !!pager,

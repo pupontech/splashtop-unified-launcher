@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SplashtopUnified.AccountBrowser;
 using Xunit;
 
@@ -34,5 +35,53 @@ public sealed class ConnectLocatorScriptTests
         Assert.Contains("expected.status", script, StringComparison.Ordinal);
         Assert.Contains("expectedPosition", script, StringComparison.Ordinal);
         Assert.Contains("my.splashtop.eu", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InlinedStepPayloadKeepsTheRequestAsAnObjectThePageCanRead()
+    {
+        var row = new ExtractedComputerRow("Later host", "later-device", "Lab", "target", true, "Online");
+        var script = ConnectLocatorScript.CreateStep(
+            "click", row, "https://my.splashtop.com/computers", 1234, "range:3-4 of 8", 40000, null, 9999999999999);
+
+        var payload = ExtractInlinedPayload(script);
+        Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("request").ValueKind);
+        Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("expected").ValueKind);
+        var request = payload.RootElement.GetProperty("request");
+        Assert.Equal("click", request.GetProperty("command").GetString());
+        Assert.Equal("https://my.splashtop.com/computers", request.GetProperty("expectedUrl").GetString());
+        Assert.Equal(1234, request.GetProperty("documentToken").GetDouble());
+        Assert.Equal("range:3-4 of 8", request.GetProperty("pageToken").GetString());
+        Assert.Equal(40000, request.GetProperty("expectedPosition").GetInt64());
+        Assert.Equal(9999999999999, request.GetProperty("deadlineEpochMilliseconds").GetInt64());
+        Assert.Equal("Later host", payload.RootElement.GetProperty("expected").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void GeneratedStepEscapesItsJavaScriptRegexesForThePage()
+    {
+        var row = new ExtractedComputerRow("Later host", "later-device", "Lab", "target", true, "Online");
+        var script = ConnectLocatorScript.CreateStep(
+            "read", row, "https://my.splashtop.com/computers", null, null, null, null, 9999999999999);
+
+        // The template is a raw string literal, so a doubled backslash reaches the page as a
+        // literal backslash: a range label like "1-3 of 9" then stops parsing, every pager is
+        // rejected, and whitespace is never collapsed.
+        Assert.Contains(@"/\s+/g", script, StringComparison.Ordinal);
+        Assert.Contains(@"\b(online|offline", script, StringComparison.Ordinal);
+        Assert.Contains(@"^\d[\d,]*\s*[-–]\s*\d[\d,]*\s+of\s+(\d[\d,]*)$", script, StringComparison.Ordinal);
+        Assert.Contains(@"(?:page\s+)?(\d+)", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\\\", script, StringComparison.Ordinal);
+    }
+
+    private static JsonDocument ExtractInlinedPayload(string script)
+    {
+        const string marker = "var payload = ";
+        var start = script.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "the generated script must inline its payload");
+        start += marker.Length;
+        var end = script.IndexOf(";\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the inlined payload must be a single statement");
+        return JsonDocument.Parse(script[start..end]);
     }
 }

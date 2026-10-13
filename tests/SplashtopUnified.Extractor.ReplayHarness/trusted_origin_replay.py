@@ -125,6 +125,7 @@ def main() -> int:
     html_by_name = {name: (fixture_dir / f"{name}.html").read_text() for name in fixtures}
     runtime_exceptions: list[str] = []
     delivered_routes: list[str] = []
+    navigations = 0
     ws: WebSocket | None = None
 
     def event_handler(message: dict):
@@ -214,6 +215,7 @@ def main() -> int:
             # from this exact generated fixture or explicitly rejected.
             event_mark = len(delivered_routes)
             runtime_exceptions.clear()
+            navigations += 1
             call("Page.navigate", {"url": f"{ORIGIN}/{name}.html"}, timeout=20)
             ready_deadline = time.monotonic() + 10
             while time.monotonic() < ready_deadline:
@@ -254,8 +256,61 @@ def main() -> int:
                            "maxProgressRows": max(progress) if progress else 0,
                            "scrollEvents": state["scrollEvents"],
                            "pageErrors": state["errors"], "runtimeExceptions": list(runtime_exceptions)})
-        if len(delivered_routes) != len(fixtures):
-            raise AssertionError(f"only {len(delivered_routes)}/{len(fixtures)} document fixtures were locally fulfilled")
+        # Connect locating pass. Production runs the same walk (extract) first and then
+        # locates and clicks through the production read/click steps; the host's page and
+        # window traversal is proven by the Windows smoke, so this replay pins the
+        # single-step contract on identities the initial document renders.
+        connect_report = []
+        connect_manifest_path = fixture_dir / "connect-manifest.json"
+        if connect_manifest_path.exists():
+            instrumentation = ("window.__replayClicks=0;"
+                               "document.addEventListener('click',function(e){"
+                               "var n=e.target;if(n&&n.closest&&n.closest('button,a,[role=button]'))window.__replayClicks++;},true);")
+            for target in json.loads(connect_manifest_path.read_text()):
+                runtime_exceptions.clear()
+                navigations += 1
+                call("Page.navigate", {"url": target["url"]}, timeout=20)
+                ready_deadline = time.monotonic() + 10
+                while time.monotonic() < ready_deadline:
+                    if evaluate("document.readyState") == "complete":
+                        break
+                    time.sleep(0.05)
+                hydration_deadline = time.monotonic() + 2
+                while time.monotonic() < hydration_deadline:
+                    count = evaluate("document.querySelectorAll('table tbody > tr').length")
+                    if isinstance(count, int) and count > 0:
+                        break
+                    time.sleep(0.025)
+                call("Runtime.evaluate", {"expression": (fixture_dir / "extract.js").read_text(),
+                                          "awaitPromise": True, "returnByValue": True}, timeout=75)
+                evaluate(instrumentation)
+                read_raw = evaluate((fixture_dir / target["readScript"]).read_text())
+                read_state = json.loads(read_raw) if isinstance(read_raw, str) else {}
+                token = read_state.get("documentToken")
+                click_script = (fixture_dir / target["clickScript"]).read_text().replace(
+                    '"documentToken":-1', f'"documentToken":{token if isinstance(token, (int, float)) else 0}')
+                click_error = None
+                try:
+                    click_raw = evaluate(click_script)
+                except RuntimeError as error:
+                    click_raw = None
+                    click_error = str(error)
+                click_state = json.loads(click_raw) if isinstance(click_raw, str) else {}
+                clicks = evaluate("window.__replayClicks||0")
+                connect_report.append({"target": target["target"], "expected": target["expected"],
+                                       "readStatus": read_state.get("status"),
+                                       "targetCount": read_state.get("targetCount"),
+                                       "targetControlCounts": read_state.get("targetControlCounts"),
+                                       "documentToken": token,
+                                       "status": click_state.get("status"),
+                                       "clickError": click_error,
+                                       "clicks": clicks if isinstance(clicks, int) else -1,
+                                       "pageErrors": evaluate("JSON.stringify(window.__replayErrors||[])"),
+                                       "runtimeExceptions": list(runtime_exceptions)})
+            (fixture_dir / "connect-results.json").write_text(json.dumps(connect_report, indent=2) + "\n")
+
+        if len(delivered_routes) != navigations:
+            raise AssertionError(f"only {len(delivered_routes)}/{navigations} navigated documents were locally fulfilled")
         (fixture_dir / "replay-results.json").write_text(json.dumps(report, indent=2) + "\n")
 
         expected = {
