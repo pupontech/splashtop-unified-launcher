@@ -786,7 +786,8 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
                 await Task.Delay(50);
                 var read = await operation.StepAsync("read");
                 if (read.Step is null || read.Step.Status != "ok") return read.Status;
-                if (read.Step.ScrollTop >= desired - 1 && read.Step.Signature != priorSignature)
+                if (read.Step.ScrollTop >= desired - 1 &&
+                    (read.Step.Signature != priorSignature || read.Step.IsAtScrollEnd))
                 {
                     painted = read.Step;
                     break;
@@ -910,8 +911,6 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             {
                 var json = JsonSerializer.Deserialize<string>(raw) ?? string.Empty;
                 var step = JsonSerializer.Deserialize<ConnectLocatorStep>(json, ConnectStepJsonOptions);
-                if (source.EndsWith("/connect-virtual.html", StringComparison.Ordinal))
-                    Console.Error.WriteLine($"SMOKE_VIRTUAL_STEP={command}:{json}");
                 if (step is null) return (null, "connect-failed");
                 if (step.Status is "blocked-origin" or "document-changed" or "page-changed") return (null, "row-changed");
                 if (step.Status == "expired") return (null, "timeout");
