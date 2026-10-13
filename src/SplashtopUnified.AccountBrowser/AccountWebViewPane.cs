@@ -261,6 +261,11 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
         try
         {
+            // A navigation retry may have queued behind an explicit Refresh. Recheck
+            // after acquiring the gate, otherwise it starts a redundant walk just as
+            // Refresh completes and makes the user's immediate Connect return busy.
+            if (!joinMatchingActive && HasConfidentReadFor(generation))
+                return new InventoryRequestAttempt(null, false);
             return await StartInventoryRequestCoreAsync(generation, joinMatchingActive);
         }
         finally
