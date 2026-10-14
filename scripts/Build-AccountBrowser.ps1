@@ -330,10 +330,25 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.connectLocator.fixture -notmatch 'invented') {
         throw 'Connect did not locate an exact later-page or off-window target, or did not refuse a changed, duplicated, or navigated target.'
     }
+    if ($null -eq $runtimeResult.hostTiming -or
+        $runtimeResult.hostTiming.minimizedHostWalk.rows -ne 240 -or
+        $runtimeResult.hostTiming.minimizedHostWalk.reportedTotal -ne 240 -or
+        $runtimeResult.hostTiming.minimizedHostWalk.outcome -ne 'Complete' -or
+        $runtimeResult.hostTiming.minimizedHostWalk.mode -ne 'scrolled' -or
+        $null -eq $runtimeResult.hostTiming.minimizedHostWalk.walkMillis -or
+        $runtimeResult.hostTiming.minimizedHostWalk.walkMillis -ge 12000 -or
+        $null -eq $runtimeResult.hostTiming.minimizedHostWalk.wallMillis -or
+        $runtimeResult.hostTiming.minimizedHostWalk.wallMillis -ge 20000 -or
+        $runtimeResult.hostTiming.concurrentRefresh.kind -ne 'Complete' -or
+        $runtimeResult.hostTiming.concurrentRefresh.walksForOneNavigation -ne 1 -or
+        $runtimeResult.hostTiming.popupInheritsAccountEnvironment -ne $true) {
+        throw 'Minimized-window refresh, joined-request completion, or popup account isolation proof is missing or failed.'
+    }
     return [ordered]@{
         nativeHandoff = $runtimeResult.nativeHandoff
         credentialSaving = $runtimeResult.credentialSaving
         inventory = $runtimeResult.inventory
+        hostTiming = $runtimeResult.hostTiming
         connectLocator = $runtimeResult.connectLocator
         environment = $EnvironmentName
         smokeTestArgument = '--smoke-test'

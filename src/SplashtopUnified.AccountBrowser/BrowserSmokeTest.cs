@@ -712,17 +712,20 @@ internal static class BrowserSmokeTest
         //    walk deadline early, and turn a healthy read into an unknown outcome.
         AccountInventorySnapshot? minimized = null;
         var minimizedWallMillis = 0;
+        var minimizedReadsBefore = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
         window.WindowState = WindowState.Minimized;
         try
         {
             var minimizedStartedAt = DateTimeOffset.Now;
             await pane.NavigateAndWaitAsync(trustedOrigin + "/large-virtualised.html", TimeSpan.FromSeconds(20));
             await WaitUntilAsync(
-                () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240),
+                () => snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240) > minimizedReadsBefore,
                 "the 240-row virtual walk to complete while the host window is minimized",
                 TimeSpan.FromSeconds(30));
             minimizedWallMillis = (int)(DateTimeOffset.Now - minimizedStartedAt).TotalMilliseconds;
             minimized = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240)!;
+            Require(window.WindowState == WindowState.Minimized,
+                "The newly published inventory was captured while the host remained minimized");
             RequireVirtual(minimized.Rows.Count == 240 && minimized.ReportedTotal == 240 &&
                     minimized.Outcome == InventoryOutcome.Complete && minimized.Mode == "scrolled" &&
                     minimized.Rows.Any(row => row.Name == "Fixture Node 240"),
@@ -750,11 +753,9 @@ internal static class BrowserSmokeTest
         var walksBeforeRefresh = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
         var refreshKind = await pane.RequestInventoryAsync();
         var concurrentWallMillis = (int)(DateTimeOffset.Now - concurrentStartedAt).TotalMilliseconds;
-        await WaitUntilAsync(
-            () => snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240) > walksBeforeRefresh,
-            "the joined walk to publish its final message",
-            TimeSpan.FromSeconds(30));
-        Require(refreshKind is InventoryRefreshKind.Complete or InventoryRefreshKind.Partial,
+        Require(snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240) == walksBeforeRefresh + 1,
+            "Refresh does not return before the joined walk publishes its exact final inventory");
+        Require(refreshKind == InventoryRefreshKind.Complete,
             $"A Refresh issued mid-walk joins the active walk and returns its result (returned {refreshKind})");
         var walksAfterRefresh = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
         Require(walksAfterRefresh == walksBeforeRefresh + 1,
