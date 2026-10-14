@@ -315,26 +315,68 @@ internal static class ConsoleInventoryExtractor
           return count + '|' + first + '|' + last + '|' + (pager.valid ? pager.pageToken : '');
         };
 
-        var waitForChange = function (signature, maxMillis, repaint) {
-          var started = now();
-          return (function poll() {
-            if (now() - started >= maxMillis || now() >= walkDeadline) { return Promise.resolve(false); }
-            return sleep(Math.min(40, Math.max(1, maxMillis - (now() - started)))).then(function () {
-              if (signatureOf() !== signature || (repaint && repaint.changed)) { return sleep(40).then(function () { return true; }); }
-              return poll();
-            });
-          })();
-        };
-
-        var waitForScrollPaint = async function (scroller, targetTop, maxMillis) {
+        // A repaint wait driven by observation instead of polling. The observer is
+        // installed before the action runs, so a repaint that happens synchronously
+        // inside the action cannot be missed, and the wait ends on the first observed
+        // change rather than on a fixed poll interval: an occluded page clamps
+        // setTimeout, which turned every 40ms poll tick into a second or more and made
+        // a live scrolled walk pay that per step. One bounded fallback timeout still
+        // ends the wait when nothing ever repaints, so a static fully rendered list or
+        // a wrong scroll ancestor can never hang the walk.
+        var SETTLE_MILLIS = 50;
+        var waitForRepaint = async function (maxMillis, performAction) {
           var signature = signatureOf();
-          var repaint = { changed: false };
-          var observer = new MutationObserver(function () { repaint.changed = true; });
-          observer.observe(grid, { childList: true, subtree: true, characterData: true });
-          try {
+          var mutated = false;
+          // The verified pager renders its own range token outside the table, so a page
+          // step can change what signatureOf() reports without touching the grid.
+          var pager = findVerifiedPager(grid);
+          return await new Promise(function (resolve, reject) {
+            var settled = false;
+            var settleTimer = null;
+            var fallbackTimer = null;
+            var teardown = function () {
+              if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null; }
+              if (fallbackTimer !== null) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+              observer.disconnect();
+            };
+            var finish = function (changed) {
+              if (settled) { return; }
+              settled = true;
+              teardown();
+              resolve(changed);
+            };
+            var observe = function () {
+              if (settled) { return; }
+              if (signatureOf() !== signature) { finish(true); return; }
+              // A mutation that has not yet changed the rendered window still gets one
+              // bounded quiet interval before it counts as the repaint, preserving the
+              // settling the poll loop used to provide for a staged hydration.
+              if (mutated && settleTimer === null) {
+                settleTimer = setTimeout(function () {
+                  settleTimer = null;
+                  finish(true);
+                }, Math.min(SETTLE_MILLIS, Math.max(1, maxMillis)));
+              }
+            };
+            var observer = new MutationObserver(function () { mutated = true; observe(); });
+            observer.observe(grid, { childList: true, subtree: true, characterData: true });
+            if (pager.valid && pager.container) {
+              observer.observe(pager.container, { childList: true, subtree: true, characterData: true, attributes: true });
+            }
+            fallbackTimer = setTimeout(function () { finish(false); }, Math.max(1, maxMillis));
+            try {
+              performAction();
+            } catch (error) {
+              settled = true;
+              teardown();
+              reject(error);
+            }
+          });
+        };
+        var waitForScrollPaint = async function (scroller, targetTop, maxMillis) {
+          return await waitForRepaint(Math.min(maxMillis, Math.max(0, walkDeadline - now())), function () {
             scroller.scrollTop = targetTop;
-            return await waitForChange(signature, Math.min(maxMillis, Math.max(0, walkDeadline - now())), repaint);
-          } finally { observer.disconnect(); }
+          });
         };
         var hasStableScrollEnd = async function (scroller, viewport) {
           var stableHeight = scroller.scrollHeight;
@@ -441,9 +483,7 @@ internal static class ConsoleInventoryExtractor
             for (var page = 0; page < MAX_STEPS && rows.length < MAX_ROWS; page++) {
               if (!next || disabled(next)) { walkedToEnd = !!next && disabled(next); break; }
               if (now() >= walkDeadline) { pageWalkFailed = true; break; }
-              var pageSignature = signatureOf();
-              next.click();
-              var changed = await waitForChange(pageSignature, Math.min(4000, Math.max(0, walkDeadline - now())));
+              var changed = await waitForRepaint(Math.min(4000, Math.max(0, walkDeadline - now())), function () { next.click(); });
               if (!changed) { pageWalkFailed = true; break; }
               var updatedPager = findVerifiedPager(grid);
               if (!updatedPager.valid || !updatedPager.present) { pageWalkFailed = true; break; }
@@ -464,16 +504,12 @@ internal static class ConsoleInventoryExtractor
             if (pagesVisited > 1) {
               var restorePager = findVerifiedPager(grid);
               if (restorePager.valid && restorePager.first && !disabled(restorePager.first)) {
-                var restoreSignature = signatureOf();
-                restorePager.first.click();
-                await waitForChange(restoreSignature, Math.min(4000, Math.max(0, walkDeadline - now())));
+                await waitForRepaint(Math.min(4000, Math.max(0, walkDeadline - now())), function () { restorePager.first.click(); });
               } else if (restorePager.valid && restorePager.previous) {
                 for (var back = 0; back < pagesVisited - 1; back++) {
                   var previousPager = findVerifiedPager(grid);
                   if (!previousPager.valid || !previousPager.previous || disabled(previousPager.previous)) { break; }
-                  var previousSignature = signatureOf();
-                  previousPager.previous.click();
-                  if (!await waitForChange(previousSignature, Math.min(4000, Math.max(0, walkDeadline - now())))) { break; }
+                  if (!await waitForRepaint(Math.min(4000, Math.max(0, walkDeadline - now())), function () { previousPager.previous.click(); })) { break; }
                 }
               }
             }
