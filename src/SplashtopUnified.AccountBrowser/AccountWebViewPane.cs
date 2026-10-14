@@ -1096,18 +1096,25 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
 
         var deferral = args.GetDeferral();
+        PopupWindow? popup = null;
         try
         {
-            var popup = new PopupWindow(environment, popups, status, businessAppHandoff, confirmNativeHandoff);
+            popup = new PopupWindow(environment, popups, status, businessAppHandoff, confirmNativeHandoff);
             popups.Add(popup);
             popup.Closed += (_, _) => popups.Remove(popup);
-            await popup.InitializeAsync();
-            args.NewWindow = popup.WebView.CoreWebView2;
+            // A WPF WebView2 control only creates its native controller once its own
+            // window is loaded, so awaiting EnsureCoreWebView2Async before the window is
+            // shown never completes and the console hangs on the first SSO/MFA popup.
+            // Show the sign-in window first, then initialize; the bounded wait turns a
+            // stalled engine handshake into a reported failure instead of a freeze.
             popup.Show();
+            await popup.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            args.NewWindow = popup.WebView.CoreWebView2;
         }
         catch (Exception exception)
         {
             args.Handled = true;
+            popup?.Close();
             status($"Could not open a sign-in popup in this account profile: {exception.Message}");
         }
         finally

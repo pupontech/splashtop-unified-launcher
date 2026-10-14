@@ -779,7 +779,8 @@ internal static class BrowserSmokeTest
         Window? popupWindow = null;
         await WaitUntilAsync(
             () => (popupWindow = Application.Current?.Windows.OfType<Window>()
-                .FirstOrDefault(item => item.Title == "Sign-in window · isolated account profile")) is not null,
+                        .FirstOrDefault(item => item.Title == "Sign-in window · isolated account profile")) is not null &&
+                  (popupWindow?.Content as WebView2)?.CoreWebView2 is not null,
             "the synthetic sign-in popup window to open",
             TimeSpan.FromSeconds(15));
         Require(statusMessages.Count(message => message.StartsWith("Popup refused", StringComparison.Ordinal)) == refusalsBefore,
