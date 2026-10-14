@@ -437,8 +437,29 @@ public sealed class ObserverRefreshTests
 
                 if (File.Exists(marker))
                 {
-                    var first = (await File.ReadAllLinesAsync(marker))[0];
-                    return int.Parse(first, CultureInfo.InvariantCulture);
+                    try
+                    {
+                        string first;
+                        // Chromium creates DevToolsActivePort and keeps it open while it
+                        // flushes both lines. A plain read is a sharing violation on
+                        // Windows, so open it shared and retry until the deadline rather
+                        // than failing the whole run on a launch race.
+                        using (var stream = new FileStream(marker, FileMode.Open, FileAccess.Read,
+                                   FileShare.ReadWrite | FileShare.Delete))
+                        using (var reader = new StreamReader(stream))
+                        {
+                            first = (await reader.ReadLineAsync()) ?? string.Empty;
+                        }
+
+                        if (int.TryParse(first, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
+                        {
+                            return port;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // The browser is still writing the marker; the loop retries.
+                    }
                 }
 
                 await Task.Delay(50);
