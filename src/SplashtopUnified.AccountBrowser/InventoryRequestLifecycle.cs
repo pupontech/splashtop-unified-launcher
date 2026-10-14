@@ -67,6 +67,28 @@ internal sealed class InventoryRequestLifecycle<TRequest> where TRequest : class
         }
     }
 
+    /// <summary>
+    /// Joins the active request only when the caller's key matches exactly — same
+    /// document generation and same document source — and never starts a request.
+    /// A matching refresh uses this before competing for the console semaphore the
+    /// in-flight walk already holds: queueing behind that semaphore would only
+    /// return after the walk completed, by which time there is nothing left to join.
+    /// </summary>
+    public bool TryJoinActive(InventoryRequestKey key, out TRequest request)
+    {
+        lock (_sync)
+        {
+            if (_activeRequest is not null && _activeKey == key)
+            {
+                request = _activeRequest;
+                return true;
+            }
+
+            request = null!;
+            return false;
+        }
+    }
+
     /// <summary>Releases only the matching completed request, never a later request.</summary>
     public bool TryComplete(TRequest request)
     {

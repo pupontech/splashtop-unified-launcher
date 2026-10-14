@@ -16,7 +16,6 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private readonly Action<string, string, bool>? _handoffEventObserver;
     private readonly Action<AccountInventorySnapshot>? _inventoryObserver;
     private readonly List<PopupWindow> _popups = [];
-    private CoreWebView2Environment? _environment;
     private int _inventoryGeneration;
     private ConsolePageKind _reportedPageKind = ConsolePageKind.Unknown;
     private readonly object _inventorySync = new();
@@ -72,7 +71,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     {
         UserDataFolder = Path.GetFullPath(userDataFolder);
         Directory.CreateDirectory(UserDataFolder);
-        var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: UserDataFolder);
+        var environment = await WebViewEnvironmentFactory.CreateAsync(UserDataFolder);
         await InitializeWithEnvironmentAsync(environment, UserDataFolder, initialUrl);
     }
 
@@ -186,7 +185,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
 
         _webView.Dispose();
-        _environment = null;
+        Environment = null;
     }
 
     private void ConfigureCore(CoreWebView2? core)
@@ -254,8 +253,23 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
     private async Task<InventoryRequestAttempt> StartInventoryRequestAsync(int generation, bool joinMatchingActive = false)
     {
+        // A matching refresh joins the walk that already owns the console semaphore
+        // instead of queueing behind it. Waiting for the semaphore would only return
+        // after the walk completed — by then there is nothing left to join and the
+        // refresh would issue a redundant second walk of the same document. The join
+        // rechecks document generation and source here, so a navigated or different
+        // document can never be joined, and joining never starts a second walk.
+        if (joinMatchingActive && TryJoinActiveInventoryRequest(generation, out var joined) && joined is not null)
+        {
+            return await AwaitJoinedInventoryRequestAsync(joined);
+        }
+
         if (!await _consoleWalkGate.WaitAsync(TimeSpan.FromSeconds(22)))
         {
+            // The gate is legitimately held for up to ~65 s by a long walk; its
+            // snapshot will still land, so report contention honestly instead of
+            // classifying it as a read failure.
+            _status("Another read is still running for this account; its result will appear when it finishes.");
             return new InventoryRequestAttempt(null, false);
         }
 
@@ -272,6 +286,32 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         {
             _consoleWalkGate.Release();
         }
+    }
+
+    private bool TryJoinActiveInventoryRequest(int generation, out InventoryRequest? joined)
+    {
+        joined = null;
+        if (_disposed || _webView.CoreWebView2 is not { } core || !IsOfficialConsoleOrigin(core.Source))
+        {
+            return false;
+        }
+
+        return _inventoryRequestLifecycle.TryJoinActive(new InventoryRequestKey(generation, core.Source), out joined) &&
+               joined is not null;
+    }
+
+    private async Task<InventoryRequestAttempt> AwaitJoinedInventoryRequestAsync(InventoryRequest request)
+    {
+        var hostDeadline = Task.Delay(TimeSpan.FromMilliseconds(ConsoleInventoryExtractor.MaxWalkMillis + 5000));
+        if (await Task.WhenAny(request.Completion.Task, hostDeadline) != request.Completion.Task)
+        {
+            // A timeout is unknown: the joined walk keeps its page-side lock until
+            // its own response or navigation invalidates it.
+            _status("Inventory read timed out; outcome is unknown. Reload this account page to release the active page lock, then retry.");
+            return new InventoryRequestAttempt(null, true);
+        }
+
+        return new InventoryRequestAttempt(await request.Completion.Task, false);
     }
 
     private async Task<InventoryRequestAttempt> StartInventoryRequestCoreAsync(int generation, bool joinMatchingActive = false)
@@ -1029,7 +1069,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
     private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
     {
         _handoffEventObserver?.Invoke(nameof(OnNewWindowRequested), args.Uri, args.IsUserInitiated);
-        await HandlePopupRequestAsync(args, _environment, _popups, _status, _businessAppHandoff, _confirmNativeHandoff);
+        await HandlePopupRequestAsync(args, Environment, _popups, _status, _businessAppHandoff, _confirmNativeHandoff);
     }
 
     private static async Task HandlePopupRequestAsync(

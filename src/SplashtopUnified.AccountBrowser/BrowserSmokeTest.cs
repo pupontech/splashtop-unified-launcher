@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace SplashtopUnified.AccountBrowser;
 
@@ -27,6 +28,7 @@ internal static class BrowserSmokeTest
             var fixture = Path.Combine(root, "fixture");
             Directory.CreateDirectory(fixture);
             await File.WriteAllTextAsync(Path.Combine(fixture, "index.html"), "<!doctype html><html><title>Synthetic isolation fixture</title><body>Not a live account</body></html>");
+            await File.WriteAllTextAsync(Path.Combine(fixture, "popup.html"), "<!doctype html><html><title>Synthetic sign-in popup</title><body>Isolated popup fixture; not a live account</body></html>");
             await File.WriteAllTextAsync(Path.Combine(fixture, "handoff.html"), CreateHandoffFixtureHtml());
             var folders = new[] { Path.Combine(root, "account-a"), Path.Combine(root, "account-b") };
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER"))) throw new InvalidOperationException("Global browser folder override would invalidate isolation.");
@@ -38,7 +40,7 @@ internal static class BrowserSmokeTest
             var environments = new CoreWebView2Environment[2];
             for (var i = 0; i < 2; i++)
             {
-                environments[i] = await CoreWebView2Environment.CreateAsync(userDataFolder: folders[i]);
+                environments[i] = await WebViewEnvironmentFactory.CreateAsync(folders[i]);
                 var pane = await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages,
                     nativeConfirmationRequests: i == 0 ? hostConfirmationRequests : null);
                 panes.Add(pane);
@@ -58,7 +60,7 @@ internal static class BrowserSmokeTest
             panes.Clear();
             for (var i = 0; i < 2; i++)
             {
-                environments[i] = await CoreWebView2Environment.CreateAsync(userDataFolder: folders[i]);
+                environments[i] = await WebViewEnvironmentFactory.CreateAsync(folders[i]);
                 panes.Add(await CreatePaneAsync(grid, i, environments[i], folders[i], fixture, i == 0 ? handoffDispatcher : null, i == 0 ? handoffEvents : null, statusMessages,
                     nativeConfirmationRequests: i == 0 ? hostConfirmationRequests : null));
             }
@@ -88,6 +90,7 @@ internal static class BrowserSmokeTest
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
             panes[1] = await CreatePaneAsync(grid, 1, environments[1], folders[1], fixture, null, null, statusMessages, snapshots.Enqueue);
             var inventory = await RunInventorySmokeAsync(panes[1], fixture, snapshots);
+            var hostTiming = await RunHostTimingSmokeAsync(window, panes[1], folders[1], snapshots, statusMessages);
             var connectLocator = await ConnectLocatorSmokeTest.RunAsync(panes[1], Path.Combine(root, "connect-locator"));
             var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
             Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
@@ -98,6 +101,7 @@ internal static class BrowserSmokeTest
                 webViewInitialized = panes.All(p => p.Core is not null),
                 nativeHandoff,
                 inventory,
+                hostTiming,
                 connectLocator,
                 credentialSaving = new { passwordAutosaveEnabled = panes[0].Core.Settings.IsPasswordAutosaveEnabled, generalAutofillEnabled = panes[0].Core.Settings.IsGeneralAutofillEnabled },
                 isolation = new { sameProcessTwoAccounts = true, cookiesIsolated = true, localStorageIsolated = true, sessionStorageIsolated = true, persistenceAfterControlRecreation = true, persistenceAfterEnvironmentRecreation = true }
@@ -165,6 +169,7 @@ internal static class BrowserSmokeTest
  <a id="popup" target="_blank" href="st-business://com.splashtop.business?source=popup-click">Popup native link</a>
  <a id="unrelated" href="unrelated-smoke://invalid.test/blocked">Unrelated scheme link</a>
  <a id="untrusted" href="st-business://com.splashtop.business?source=untrusted-origin">Untrusted-origin link</a>
+ <a id="webpopup" target="_blank" href="popup.html">Web sign-in popup link</a>
  <button id="delayed" type="button" onclick="window.chrome.webview.postMessage({source:'splashtop-native-connection-preference',version:1,type:'armed'});setTimeout(() => { location.href = 'st-business://com.splashtop.business?source=delayed-redirect'; }, 300)">Connect: page-forged arm and delayed native chooser follow-up</button>
  </body></html>
  """;
@@ -674,6 +679,133 @@ internal static class BrowserSmokeTest
         };
     }
 
+    /// <summary>
+    /// Exercises the host-side timing contract on real WebView2: a virtual walk that
+    /// runs while the host window is minimized (the occluded/backgrounded case the
+    /// shared environment switches exist for), a manual Refresh issued mid-walk that
+    /// must join the active walk and wait for its final message instead of racing the
+    /// console semaphore, and a web popup that must inherit the account's own browser
+    /// environment. Synthetic local fixtures only; no live account is accessed.
+    /// </summary>
+    private static async Task<object> RunHostTimingSmokeAsync(
+        Window window,
+        AccountWebViewPane pane,
+        string accountFolder,
+        ConcurrentQueue<AccountInventorySnapshot> snapshots,
+        ConcurrentQueue<string> statusMessages)
+    {
+        const string trustedOrigin = "https://my.splashtop.com";
+        foreach (var requiredSwitch in new[]
+                 {
+                     "--disable-background-timer-throttling",
+                     "--disable-renderer-backgrounding",
+                     "--disable-backgrounding-occluded-windows",
+                     "--disable-features=CalculateNativeWinOcclusion"
+                 })
+        {
+            Require(WebViewEnvironmentFactory.BrowserSwitches.Contains(requiredSwitch, StringComparison.Ordinal),
+                $"Every account environment is created with {requiredSwitch}");
+        }
+
+        // 1. Minimized host: the pane is occluded and backgrounded while the walk runs.
+        //    Background timer throttling would clamp the page-side sleeps, expire the
+        //    walk deadline early, and turn a healthy read into an unknown outcome.
+        AccountInventorySnapshot? minimized = null;
+        var minimizedWallMillis = 0;
+        window.WindowState = WindowState.Minimized;
+        try
+        {
+            var minimizedStartedAt = DateTimeOffset.Now;
+            await pane.NavigateAndWaitAsync(trustedOrigin + "/large-virtualised.html", TimeSpan.FromSeconds(20));
+            await WaitUntilAsync(
+                () => snapshots.Any(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240),
+                "the 240-row virtual walk to complete while the host window is minimized",
+                TimeSpan.FromSeconds(30));
+            minimizedWallMillis = (int)(DateTimeOffset.Now - minimizedStartedAt).TotalMilliseconds;
+            minimized = snapshots.Last(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240)!;
+            RequireVirtual(minimized.Rows.Count == 240 && minimized.ReportedTotal == 240 &&
+                    minimized.Outcome == InventoryOutcome.Complete && minimized.Mode == "scrolled" &&
+                    minimized.Rows.Any(row => row.Name == "Fixture Node 240"),
+                "A minimized host still walks the virtualised list to completeness", minimized,
+                wallMillis: minimizedWallMillis);
+            RequireVirtual(minimized.WalkMillis < 12000,
+                "The minimized-host virtual walk stays inside its budget", minimized, wallMillis: minimizedWallMillis);
+            RequireVirtual(minimizedWallMillis < 20000,
+                "The minimized-host walk finishes inside the refresh budget", minimized, wallMillis: minimizedWallMillis);
+        }
+        finally
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        // 2. A manual Refresh while the automatic walk is still in flight must join
+        //    that walk (same generation and document) and wait for its final message,
+        //    never issuing a second overlapping walk of the same document.
+        var concurrentStartedAt = DateTimeOffset.Now;
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/large-virtualised.html", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(
+            async () => JsonSerializer.Deserialize<bool>(await pane.ExecuteScriptAsync("!!window.__splashtopInventoryWalkActive")),
+            "the automatic virtual walk to be in flight",
+            TimeSpan.FromSeconds(15));
+        var walksBeforeRefresh = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
+        var refreshKind = await pane.RequestInventoryAsync();
+        var concurrentWallMillis = (int)(DateTimeOffset.Now - concurrentStartedAt).TotalMilliseconds;
+        await WaitUntilAsync(
+            () => snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240) > walksBeforeRefresh,
+            "the joined walk to publish its final message",
+            TimeSpan.FromSeconds(30));
+        Require(refreshKind is InventoryRefreshKind.Complete or InventoryRefreshKind.Partial,
+            $"A Refresh issued mid-walk joins the active walk and returns its result (returned {refreshKind})");
+        var walksAfterRefresh = snapshots.Count(item => item.PageKind == ConsolePageKind.ComputerList && item.Rows.Count == 240);
+        Require(walksAfterRefresh == walksBeforeRefresh + 1,
+            "A mid-walk Refresh joins the in-flight walk instead of starting a second one");
+        Require(concurrentWallMillis < 30000,
+            "The joined Refresh returns well inside the walk budget");
+
+        // 3. A web popup must open in the account's own browser environment, not be
+        //    refused, and must inherit exactly the pane's isolated user-data folder.
+        await pane.NavigateAndWaitAsync(trustedOrigin + "/handoff.html", TimeSpan.FromSeconds(20));
+        var refusalsBefore = statusMessages.Count(message => message.StartsWith("Popup refused", StringComparison.Ordinal));
+        await ClickElementAsync(pane, "webpopup");
+        Window? popupWindow = null;
+        await WaitUntilAsync(
+            () => (popupWindow = Application.Current?.Windows.OfType<Window>()
+                .FirstOrDefault(item => item.Title == "Sign-in window · isolated account profile")) is not null,
+            "the synthetic sign-in popup window to open",
+            TimeSpan.FromSeconds(15));
+        Require(statusMessages.Count(message => message.StartsWith("Popup refused", StringComparison.Ordinal)) == refusalsBefore,
+            "An allowed web popup destination is opened, not refused");
+        var popupWebView = popupWindow!.Content as WebView2;
+        Require(popupWebView?.CoreWebView2 is not null,
+            "The popup hosts its own WebView2 in the isolated account profile");
+        Require(string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(popupWebView!.CoreWebView2!.Environment.UserDataFolder)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(accountFolder)),
+                StringComparison.OrdinalIgnoreCase),
+            "The popup inherits the owning account's own browser environment");
+        popupWindow.Close();
+
+        return new
+        {
+            minimizedHostWalk = new
+            {
+                rows = minimized.Rows.Count,
+                reportedTotal = minimized.ReportedTotal,
+                outcome = minimized.Outcome.ToString(),
+                mode = minimized.Mode,
+                walkMillis = minimized.WalkMillis,
+                wallMillis = minimizedWallMillis
+            },
+            concurrentRefresh = new
+            {
+                kind = refreshKind.ToString(),
+                walksForOneNavigation = walksAfterRefresh - walksBeforeRefresh,
+                wallMillis = concurrentWallMillis
+            },
+            popupInheritsAccountEnvironment = true
+        };
+    }
+
     private static async Task<ChooserProbe?> WaitForChooserAsync(AccountWebViewPane pane)
     {
         for (var attempt = 0; attempt < 8; attempt++)
@@ -714,6 +846,18 @@ internal static class BrowserSmokeTest
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("Timed out waiting for WebView2 smoke assertion: " + description);
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition, string description, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await condition()) return;
             await Task.Delay(25);
         }
 
