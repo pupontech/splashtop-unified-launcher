@@ -1,0 +1,83 @@
+name: Windows Prototype CI and ZIP
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-prototype:
+    name: Windows x64 prototype tests, smoke test, and portable ZIP
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v7.0.1 — verified release commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # actions/setup-dotnet v6.0.0 — verified release commit SHA.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Require app and test projects
+        shell: pwsh
+        run: |
+          $required = @(
+            'src/SplashtopUnified.App/SplashtopUnified.App.csproj',
+            'tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj',
+            'tests/SplashtopUnified.Prototype.Tests/SplashtopUnified.Prototype.Tests.csproj'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required project is missing: $path"
+            }
+          }
+
+      - name: Restore projects
+        shell: pwsh
+        run: |
+          dotnet restore tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore tests/SplashtopUnified.Prototype.Tests/SplashtopUnified.Prototype.Tests.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore src/SplashtopUnified.App/SplashtopUnified.App.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Core (Release)
+        shell: pwsh
+        run: dotnet build src/SplashtopUnified.Core/SplashtopUnified.Core.csproj --configuration Release --no-restore
+
+      - name: Test Core (Release)
+        shell: pwsh
+        run: dotnet test tests/SplashtopUnified.Core.Tests/SplashtopUnified.Core.Tests.csproj --configuration Release --no-restore --verbosity normal
+
+      - name: Build WPF app (Release)
+        shell: pwsh
+        run: dotnet build src/SplashtopUnified.App/SplashtopUnified.App.csproj --configuration Release --no-restore
+
+      - name: Test Prototype (Release)
+        shell: pwsh
+        run: dotnet test tests/SplashtopUnified.Prototype.Tests/SplashtopUnified.Prototype.Tests.csproj --configuration Release --no-restore --verbosity normal
+
+      - name: Verify actual UI import pipeline regressions
+        shell: pwsh
+        run: dotnet run --project tests/SplashtopUnified.ImportProof/ImportProof.csproj --configuration Release
+
+      - name: Publish, smoke test, and package portable ZIP
+        shell: pwsh
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: ./scripts/Build-Prototype.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -SourceCommit $env:SOURCE_COMMIT -Configuration Release -RuntimeIdentifier win-x64 -SmokeTestTimeoutSeconds 90
+
+      # actions/upload-artifact v4.6.2 — verified release commit SHA and signature.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: prototype-win-x64-${{ github.sha }}
+          path: artifacts/prototype/SplashtopUnified-Prototype-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14

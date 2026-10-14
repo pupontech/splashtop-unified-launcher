@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit.v3.mtp-off" Version="4.0.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/BusinessAppHandoff.cs" Link="BusinessAppHandoff.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/NativeHandoffArm.cs" Link="NativeHandoffArm.cs" />
+    <Compile Include="../../src/SplashtopUnified.AccountBrowser/NativeConnectionPreference.cs" Link="NativeConnectionPreference.cs" />
+  </ItemGroup>
+</Project>
