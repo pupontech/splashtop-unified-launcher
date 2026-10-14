@@ -114,9 +114,8 @@ public sealed class ObserverRefreshTests
         var browser = FindBrowser();
         if (browser is null)
         {
-            // A hosted runner without a local Chromium or Edge cannot run the browser
-            // proof; record the skip instead of failing a build for an absent binary.
-            Assert.True(true, "Skipped: no local Chromium or Edge binary was found, so the observer refresh browser proof did not run.");
+            // Missing browser infrastructure is not a passing behavioral proof.
+            Assert.Fail("Observer refresh proof requires Chromium or Edge. Set SPLASHTOP_TEST_BROWSER to an installed browser executable.");
         }
 
         return browser;
