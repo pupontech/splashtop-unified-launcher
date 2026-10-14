@@ -123,7 +123,13 @@ function Invoke-AccountBrowserSmokeTest {
         if (-not $process.WaitForExit([int]$timeoutMilliseconds)) {
             try { $process.Kill($true) } catch { }
             $process.WaitForExit()
-            throw "Account Browser --smoke-test ($EnvironmentName) exceeded the $TimeoutSeconds-second timeout."
+            # Read whatever the killed process already wrote so a timeout names the
+            # exact step it reached instead of failing with no evidence at all.
+            $partialStdout = ''
+            $partialStderr = ''
+            try { $partialStdout = $stdoutTask.GetAwaiter().GetResult() } catch { }
+            try { $partialStderr = $stderrTask.GetAwaiter().GetResult() } catch { }
+            throw "Account Browser --smoke-test ($EnvironmentName) exceeded the $TimeoutSeconds-second timeout. Partial stdout: $($partialStdout.Trim()) Partial stderr: $($partialStderr.Trim())"
         }
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()

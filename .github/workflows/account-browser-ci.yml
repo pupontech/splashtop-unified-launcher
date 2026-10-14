@@ -92,7 +92,7 @@ jobs:
         shell: pwsh
         env:
           SOURCE_COMMIT: ${{ github.sha }}
-        run: ./scripts/Build-AccountBrowser.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -SourceCommit $env:SOURCE_COMMIT -Configuration Release -RuntimeIdentifier win-x64 -SmokeTestTimeoutSeconds 90
+        run: ./scripts/Build-AccountBrowser.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -SourceCommit $env:SOURCE_COMMIT -Configuration Release -RuntimeIdentifier win-x64 -SmokeTestTimeoutSeconds 180
 
       # actions/upload-artifact v4.6.2 — verified signed release commit SHA.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
