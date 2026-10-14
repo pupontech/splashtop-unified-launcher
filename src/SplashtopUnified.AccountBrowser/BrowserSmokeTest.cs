@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -89,9 +90,13 @@ internal static class BrowserSmokeTest
             panes[1].Dispose();
             var snapshots = new ConcurrentQueue<AccountInventorySnapshot>();
             panes[1] = await CreatePaneAsync(grid, 1, environments[1], folders[1], fixture, null, null, statusMessages, snapshots.Enqueue);
+            Console.Error.WriteLine("SMOKE_PHASE=inventory-start@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var inventory = await RunInventorySmokeAsync(panes[1], fixture, snapshots);
+            Console.Error.WriteLine("SMOKE_PHASE=host-timing-start@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var hostTiming = await RunHostTimingSmokeAsync(window, panes[1], folders[1], snapshots, statusMessages);
+            Console.Error.WriteLine("SMOKE_PHASE=connect-locator-start@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var connectLocator = await ConnectLocatorSmokeTest.RunAsync(panes[1], Path.Combine(root, "connect-locator"));
+            Console.Error.WriteLine("SMOKE_PHASE=phases-done@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
             Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
             var result = new
@@ -740,6 +745,7 @@ internal static class BrowserSmokeTest
         {
             window.WindowState = WindowState.Normal;
         }
+        Console.Error.WriteLine("SMOKE_PHASE=host-timing:minimized-done@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
 
         // 2. A manual Refresh while the automatic walk is still in flight must join
         //    that walk (same generation and document) and wait for its final message,
@@ -762,11 +768,13 @@ internal static class BrowserSmokeTest
             "A mid-walk Refresh joins the in-flight walk instead of starting a second one");
         Require(concurrentWallMillis < 30000,
             "The joined Refresh returns well inside the walk budget");
+        Console.Error.WriteLine("SMOKE_PHASE=host-timing:concurrent-done@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
 
         // 3. A web popup must open in the account's own browser environment, not be
         //    refused, and must inherit exactly the pane's isolated user-data folder.
         await pane.NavigateAndWaitAsync(trustedOrigin + "/handoff.html", TimeSpan.FromSeconds(20));
         var refusalsBefore = statusMessages.Count(message => message.StartsWith("Popup refused", StringComparison.Ordinal));
+        Console.Error.WriteLine("SMOKE_PHASE=host-timing:popup-click@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
         await ClickElementAsync(pane, "webpopup");
         Window? popupWindow = null;
         await WaitUntilAsync(
@@ -785,6 +793,7 @@ internal static class BrowserSmokeTest
                 StringComparison.OrdinalIgnoreCase),
             "The popup inherits the owning account's own browser environment");
         popupWindow.Close();
+        Console.Error.WriteLine("SMOKE_PHASE=host-timing:popup-done@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
 
         return new
         {
