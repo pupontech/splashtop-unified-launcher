@@ -96,6 +96,8 @@ internal static class BrowserSmokeTest
             var hostTiming = await RunHostTimingSmokeAsync(window, panes[1], folders[1], snapshots, statusMessages);
             Console.Error.WriteLine("SMOKE_PHASE=connect-locator-start@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var connectLocator = await ConnectLocatorSmokeTest.RunAsync(panes[1], Path.Combine(root, "connect-locator"));
+            Console.Error.WriteLine("SMOKE_PHASE=navigation-readiness-start@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
+            var navigationReadiness = await NavigationReadinessSmokeTest.RunAsync(panes[1], Path.Combine(root, "connect-locator"), snapshots);
             Console.Error.WriteLine("SMOKE_PHASE=phases-done@" + DateTimeOffset.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture));
             var credentialSaving = panes.All(p => p.Core.Settings.IsPasswordAutosaveEnabled && p.Core.Settings.IsGeneralAutofillEnabled);
             Require(credentialSaving, "Both isolated accounts allow the engine-managed password store");
@@ -108,6 +110,7 @@ internal static class BrowserSmokeTest
                 inventory,
                 hostTiming,
                 connectLocator,
+                navigationReadiness,
                 credentialSaving = new { passwordAutosaveEnabled = panes[0].Core.Settings.IsPasswordAutosaveEnabled, generalAutofillEnabled = panes[0].Core.Settings.IsGeneralAutofillEnabled },
                 isolation = new { sameProcessTwoAccounts = true, cookiesIsolated = true, localStorageIsolated = true, sessionStorageIsolated = true, persistenceAfterControlRecreation = true, persistenceAfterEnvironmentRecreation = true }
             };
