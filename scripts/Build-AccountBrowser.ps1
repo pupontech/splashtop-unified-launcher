@@ -336,6 +336,16 @@ function Invoke-AccountBrowserSmokeTest {
         $runtimeResult.connectLocator.fixture -notmatch 'invented') {
         throw 'Connect did not locate an exact later-page or off-window target, or did not refuse a changed, duplicated, or navigated target.'
     }
+    foreach ($caseName in @('delayedGrid', 'delayedRows')) {
+        $readiness = $runtimeResult.navigationReadiness.$caseName
+        if ($null -eq $readiness -or
+            $readiness.delayedHydrationDiscovered -ne $true -or
+            $readiness.manualRefreshInvoked -ne $false -or
+            $readiness.rows -ne 5 -or $readiness.reportedTotal -ne 5 -or
+            $readiness.headerOnly -ne ($caseName -eq 'delayedRows')) {
+            throw "Navigation readiness runtime proof is missing or failed: $caseName."
+        }
+    }
     if ($null -eq $runtimeResult.hostTiming -or
         $runtimeResult.hostTiming.minimizedHostWalk.rows -ne 240 -or
         $runtimeResult.hostTiming.minimizedHostWalk.reportedTotal -ne 240 -or

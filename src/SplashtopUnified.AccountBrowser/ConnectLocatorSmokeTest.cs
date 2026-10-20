@@ -89,7 +89,7 @@ internal static class ConnectLocatorSmokeTest
         await pane.ExecuteScriptAsync("window.__connectClicks=0;window.__connectedTarget='';");
         Require(pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured) && captured is not null,
             $"The synthetic target is captured from complete inventory for {fileName}.");
-        var result = await pane.ActivateConnectAsync(captured!);
+        var result = await BrowserSmokeTest.ActivateWhenIdleAsync(() => pane.ActivateConnectAsync(captured!));
         Console.Error.WriteLine($"SMOKE_CONNECT_RESULT={fileName}:{result}");
         return result;
     }
@@ -109,7 +109,7 @@ internal static class ConnectLocatorSmokeTest
         await pane.ExecuteScriptAsync("window.__connectClicks=0;window.__connectedTarget='';");
         Require(pane.TryCaptureConnectTarget(targetIndex, target.ToExtractedRow(), out var captured) && captured is not null,
             "The virtual target is captured from complete inventory.");
-        return await pane.ActivateConnectAsync(captured!);
+        return await BrowserSmokeTest.ActivateWhenIdleAsync(() => pane.ActivateConnectAsync(captured!));
     }
 
     private static string BuildPagedHtml(SyntheticRow[] rows, int pageSize)

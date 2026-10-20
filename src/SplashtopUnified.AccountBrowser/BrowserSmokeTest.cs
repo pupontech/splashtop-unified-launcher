@@ -168,6 +168,21 @@ internal static class BrowserSmokeTest
         catch { grid.Children.Remove(pane); pane.Dispose(); throw; }
     }
 
+    internal static async Task<string> ActivateWhenIdleAsync(Func<Task<string>> activate)
+    {
+        // Busy explicitly refuses activation. Retry only that no-click result,
+        // retaining the same captured target and every existing identity guard.
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
+        var result = await activate();
+        Console.Error.WriteLine("SMOKE_CONNECT_INITIAL_STATUS=" + result);
+        while (result == "busy" && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+            result = await activate();
+        }
+        return result;
+    }
+
     private static string CreateHandoffFixtureHtml() => """
  <!doctype html>
  <html><head><meta charset="utf-8"><title>Synthetic native handoff fixture</title>
@@ -329,17 +344,7 @@ internal static class BrowserSmokeTest
         Require(read.Rows.Single(row => row.Name == "Fixture Backup").Status is null,
             "A device name that contains a status word is never treated as a status");
 
-        var firstConnect = await pane.ActivateConnectAsync(0);
-        Console.Error.WriteLine("SMOKE_FIRST_CONNECT_STATUS=" + firstConnect);
-        // A snapshot can be delivered before the asynchronous walk owner has
-        // released its gate. Busy is a no-click result, not a wrong-row action.
-        // Retry only this explicitly refused result, never a successful click.
-        var idleDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
-        while (firstConnect == "busy" && DateTimeOffset.UtcNow < idleDeadline)
-        {
-            await Task.Delay(25);
-            firstConnect = await pane.ActivateConnectAsync(0);
-        }
+        var firstConnect = await ActivateWhenIdleAsync(() => pane.ActivateConnectAsync(0));
         Require(firstConnect == "clicked", "Connect activates the owning page's own row control (actual=" + firstConnect + ")");
         var clickCount = await pane.ExecuteScriptAsync("window.__connectClicks||0");
         Require(clickCount.Trim() == "1", "The page observed exactly one Connect activation from the unified list");
