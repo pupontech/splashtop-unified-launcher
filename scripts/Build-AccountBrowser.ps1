@@ -366,6 +366,7 @@ function Invoke-AccountBrowserSmokeTest {
         inventory = $runtimeResult.inventory
         hostTiming = $runtimeResult.hostTiming
         connectLocator = $runtimeResult.connectLocator
+        navigationReadiness = $runtimeResult.navigationReadiness
         environment = $EnvironmentName
         smokeTestArgument = '--smoke-test'
         exitCode = 0
