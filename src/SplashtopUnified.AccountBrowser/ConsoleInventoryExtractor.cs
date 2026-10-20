@@ -469,7 +469,16 @@ internal static class ConsoleInventoryExtractor
               resolve();
             };
             var check = function () {
-              if (document.querySelector('input[type=password]') || findGrid() ||
+              var match = findGrid();
+              // A header-only/loading shell is not a usable inventory yet. A
+              // recognized empty list is ready only with an explicit zero total.
+              var ready = match && (findResultCount() === 0 || rowElements(match.grid, match.map).some(function (row) {
+                var cells = match.grid.tagName === 'TABLE'
+                  ? row.querySelectorAll(':scope > td')
+                  : row.querySelectorAll('[role=gridcell],[role=cell],td');
+                return !!clean(cells[match.map.name] ? cells[match.map.name].textContent : '', 512);
+              }));
+              if (document.querySelector('input[type=password]') || ready ||
                   location.href !== currentUrl.href || now() >= walkDeadline) { finish(); }
             };
             var observer = new MutationObserver(function () {
