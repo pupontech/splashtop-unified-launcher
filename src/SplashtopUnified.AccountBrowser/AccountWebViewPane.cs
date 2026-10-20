@@ -222,25 +222,12 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
 
     private async Task ReadInventoryAfterNavigation(int generation)
     {
-        for (var attempt = 0; attempt < 3 && !_disposed; attempt++)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(attempt == 0 ? 350 : 700));
-            if (_disposed || _webView.CoreWebView2 is null || generation != _inventoryGeneration)
-            {
-                return;
-            }
-
-            if (HasConfidentReadFor(generation))
-            {
-                return;
-            }
-
-            var read = (await StartInventoryRequestAsync(generation)).Read;
-            if (read is null || read.PageKind == ConsolePageKind.ComputerList)
-            {
-                return;
-            }
-        }
+        // Start immediately. The same document-owned inventory request observes
+        // semantic grid readiness before walking, rather than guessing hydration
+        // with timer-first retries. Manual Refresh can join this exact request.
+        if (_disposed || _webView.CoreWebView2 is null || generation != _inventoryGeneration ||
+            HasConfidentReadFor(generation)) return;
+        await StartInventoryRequestAsync(generation, waitForReadiness: true);
     }
 
     private bool HasConfidentReadFor(int generation)
@@ -251,7 +238,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         }
     }
 
-    private async Task<InventoryRequestAttempt> StartInventoryRequestAsync(int generation, bool joinMatchingActive = false)
+    private async Task<InventoryRequestAttempt> StartInventoryRequestAsync(int generation, bool joinMatchingActive = false, bool waitForReadiness = false)
     {
         // A matching refresh joins the walk that already owns the console semaphore
         // instead of queueing behind it. Waiting for the semaphore would only return
@@ -280,7 +267,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             // Refresh completes and makes the user's immediate Connect return busy.
             if (!joinMatchingActive && HasConfidentReadFor(generation))
                 return new InventoryRequestAttempt(null, false);
-            return await StartInventoryRequestCoreAsync(generation, joinMatchingActive);
+            return await StartInventoryRequestCoreAsync(generation, joinMatchingActive, waitForReadiness);
         }
         finally
         {
@@ -314,7 +301,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
         return new InventoryRequestAttempt(await request.Completion.Task, false);
     }
 
-    private async Task<InventoryRequestAttempt> StartInventoryRequestCoreAsync(int generation, bool joinMatchingActive = false)
+    private async Task<InventoryRequestAttempt> StartInventoryRequestCoreAsync(int generation, bool joinMatchingActive = false, bool waitForReadiness = false)
     {
         var core = _webView.CoreWebView2;
         if (_disposed || core is null || !IsOfficialConsoleOrigin(core.Source))
@@ -346,7 +333,7 @@ internal sealed class AccountWebViewPane : Grid, IDisposable
             Task<string> execution;
             try
             {
-                execution = core.ExecuteScriptAsync(ConsoleInventoryExtractor.CreateExtractScript(request.RequestId));
+                execution = core.ExecuteScriptAsync(ConsoleInventoryExtractor.CreateExtractScript(request.RequestId, waitForReadiness));
             }
             catch (Exception)
             {

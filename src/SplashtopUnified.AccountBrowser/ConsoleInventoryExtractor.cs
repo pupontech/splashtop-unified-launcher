@@ -44,7 +44,7 @@ internal static class ConsoleInventoryExtractor
     /// </summary>
     public static string ExtractScript => CreateExtractScript("unbound-request");
 
-    public static string CreateExtractScript(string requestId)
+    public static string CreateExtractScript(string requestId, bool waitForReadiness = false)
     {
         if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 64 || requestId.Any(char.IsControl))
         {
@@ -53,7 +53,8 @@ internal static class ConsoleInventoryExtractor
 
         return ExtractScriptTemplate
             .Replace("__REQUEST_ID__", JsonSerializer.Serialize(requestId), StringComparison.Ordinal)
-            .Replace("__MAX_WALK_MILLIS__", MaxWalkMillis.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            .Replace("__MAX_WALK_MILLIS__", MaxWalkMillis.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("__READINESS_MILLIS__", waitForReadiness ? "10000" : "0", StringComparison.Ordinal);
     }
 
     private static string ExtractScriptTemplate => """
@@ -452,6 +453,36 @@ internal static class ConsoleInventoryExtractor
           return isFinite(total) && total >= 0 ? total : null;
         };
 
+        // This observer belongs to the existing correlated document walk and its
+        // lock, not a second script/read. Observe before checking to avoid losing
+        // hydration between the first inspection and observer installation. The
+        // existing semantic parser remains the only grid-readiness definition.
+        if (__READINESS_MILLIS__ > 0) {
+          await new Promise(function (resolve) {
+            var settled = false, timer = null;
+            var finish = function () {
+              if (settled) { return; }
+              settled = true;
+              observer.disconnect();
+              if (timer !== null) { clearTimeout(timer); }
+              window.removeEventListener('pagehide', finish);
+              resolve();
+            };
+            var check = function () {
+              if (document.querySelector('input[type=password]') || findGrid() ||
+                  location.href !== currentUrl.href || now() >= walkDeadline) { finish(); }
+            };
+            var observer = new MutationObserver(function () {
+              try { check(); } catch (_) { finish(); }
+            });
+            observer.observe(document.documentElement, { subtree: true, childList: true,
+              characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'role'] });
+            window.addEventListener('pagehide', finish);
+            timer = setTimeout(finish, Math.min(__READINESS_MILLIS__, Math.max(0, walkDeadline - now())));
+            try { check(); } catch (_) { finish(); }
+          });
+          if (location.href !== currentUrl.href) { return; }
+        }
         var hasPassword = !!document.querySelector('input[type=password]');
         var gridMatch = findGrid();
         if (!gridMatch) {
