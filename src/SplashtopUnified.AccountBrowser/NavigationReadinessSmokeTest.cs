@@ -20,13 +20,19 @@ internal static class NavigationReadinessSmokeTest
         var payload = JsonSerializer.Serialize(inventoryHtml);
         var html = "<!doctype html><html><head><meta charset='utf-8'></head><body>" +
             "<main>Invented console awaiting hydration; not a live account.</main>" +
-            "<script>setTimeout(function(){var parsed=new DOMParser().parseFromString(" + payload +
-            ", 'text/html');document.body.innerHTML=parsed.body.innerHTML;window.__syntheticReadinessHydrated=true;},3000);</script></body></html>";
+            "<script>window.__syntheticHydrate=function(){var parsed=new DOMParser().parseFromString(" + payload +
+            ", 'text/html');document.body.innerHTML=parsed.body.innerHTML;window.__syntheticReadinessHydrated=true;};</script></body></html>";
         await File.WriteAllTextAsync(Path.Combine(fixture, file), html);
         pane.Core.SetVirtualHostNameToFolderMapping("my.splashtop.com", fixture, CoreWebView2HostResourceAccessKind.DenyCors);
         while (snapshots.TryDequeue(out _)) { }
-        await pane.NavigateAndWaitAsync(url, TimeSpan.FromSeconds(20));
         var started = Stopwatch.StartNew();
+        await pane.NavigateAndWaitAsync(url, TimeSpan.FromSeconds(20));
+        var initiallyUnsupported = await pane.ExecuteScriptAsync("location.href===" + JsonSerializer.Serialize(url) +
+            " && !window.__syntheticReadinessHydrated && document.querySelectorAll('table,[role=grid],[role=table]').length===0 && typeof window.__syntheticHydrate==='function'");
+        if (initiallyUnsupported != "true") throw new InvalidOperationException("Navigation readiness fixture was not observed before hydration.");
+        // Arm hydration only AFTER proving the real page has no inventory. A slow
+        // navigation can never turn this into an already-hydrated-page false positive.
+        await pane.ExecuteScriptAsync("setTimeout(window.__syntheticHydrate,3000);void 0;");
         AccountInventorySnapshot? observed = null;
         while (started.Elapsed < TimeSpan.FromSeconds(10))
         {
